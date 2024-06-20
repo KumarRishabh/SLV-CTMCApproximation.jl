@@ -26,7 +26,6 @@ julia -e 'using Pkg; Pkg.add("path_to_your_package")'
 
 <!-- Add Zhenyu Cui's references -->
 
-## References
 
 [^1]: Zhenyu Cui, J. Lars Kirkby, and Duy Nguyen. "A general valuation framework for SABR and stochastic local volatility models." _SIAM Journal on Financial Mathematics_, 9(2):520–563, 2018.
 [^2]: Zhenyu Cui, J. Lars Kirkby, and Duy Nguyen. "Efficient simulation of generalized SABR and stochastic local volatility models based on Markov chain approximations." _European Journal of Operational Research_, 290(3):1046–1062, 2021.
