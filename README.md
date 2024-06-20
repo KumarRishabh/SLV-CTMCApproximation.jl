@@ -1,6 +1,6 @@
 # Stochastic Volatility Options Pricing with Markov Chain Approximation
 
-This Julia library implements the Markov chain approximation approach to simulate and price options using Stochastic Volatility models. This approach is based on the work of Zhenyu Cui, which provides an efficient method for dealing with stochastic processes in the context of financial modeling.
+This Julia library implements the Markov chain approximation approach to simulate and price options using Stochastic Volatility models. This approach is based on the work of Zhenyu Cui et. al. [^1][^2][^3], which provides an efficient method for dealing with stochastic processes in the context of financial modeling.
 
 ## Overview
 
@@ -25,3 +25,9 @@ julia -e 'using Pkg; Pkg.add("path_to_your_package")'
 ```
 
 <!-- Add Zhenyu Cui's references -->
+
+## References
+
+[^1]: Zhenyu Cui, J. Lars Kirkby, and Duy Nguyen. "A general valuation framework for SABR and stochastic local volatility models." _SIAM Journal on Financial Mathematics_, 9(2):520–563, 2018.
+[^2]: Zhenyu Cui, J. Lars Kirkby, and Duy Nguyen. "Efficient simulation of generalized SABR and stochastic local volatility models based on Markov chain approximations." _European Journal of Operational Research_, 290(3):1046–1062, 2021.
+[^3]: Zhenyu Cui, Anne MacKay, and Marie-Claude Vachon. "Analysis of VIX-linked fee incentives in variable annuities via continuous-time Markov chain approximation," 2022.
