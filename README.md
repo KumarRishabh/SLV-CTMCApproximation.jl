@@ -4,7 +4,7 @@ This Julia library implements the Markov chain approximation approach to simulat
 
 ## Overview
 
-Stochastic Volatility models are widely used in financial mathematics to capture the dynamic behavior of volatility in asset prices. These models help in better understanding and pricing of derivative products such as options. The Markov chain approximation method provides a numerical approach to approximate the continuous stochastic processes with a discrete Markov chain, facilitating easier and faster computation.
+Stochastic Volatility models are widely used in financial mathematics to capture the dynamic behavior of volatility in asset prices. These models help in better understanding and pricing of derivative products such as options. The Markov chain approximation method provides a numerical approach to approximate the continuous stochastic processes with a discrete (space) continuous-time Markov chain, facilitating easier and faster computation.
 
 ## Features
 
