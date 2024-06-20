@@ -22,5 +22,6 @@ To install this library, you can clone the repository and use Julia's package ma
 git clone https://github.com/yourusername/stochastic-volatility-options-pricing.git
 cd stochastic-volatility-options-pricing
 julia -e 'using Pkg; Pkg.add("path_to_your_package")'
+```
 
 <!-- Add Zhenyu Cui's references -->
