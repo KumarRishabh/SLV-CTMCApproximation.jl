@@ -23,19 +23,27 @@ module SLVCTMCApproximation
         if binning_mode == "uniform"
             dv = (v_max - v_min)/n
         elseif binning_mode == "Lo-Skindilias"
-            dv = 2*κ*sqrt(v_min)*sqrt(1 - ϱ^2)*sqrt(1 - exp(-2*κ))
+            # each dv is a function of v
+            dv = 0
         elseif binning_mode
         end
             # Initialize the bins
         bins = zeros(n)
         # Set the bin values
         for i in 1:n
-            bins[i] = v_min + (i - 1)*dv
+            if binning_mode == "uniform"
+                bins[i] = v_min + (i - 1)*dv
+            elseif binning_mode == "Lo-Skindilias"
+                # each bin is a function of v
+                # TODO: Impelment the Lo-Skindilias binning mode
+            elseif binning_mode == "other"
+                # TODO: Implement other binning modes
         end
+
         return bins
     end
 
-    function HestonApproximation(μ, ν, κ, ρ, ϱ, S0, v0, T, N, M; mode = "Kushner-Kushner")
+    function HestonApproximation(μ, ν, κ, ρ, ϱ, S0, v0, T, N, M; mode = "Explicit-Kushner")
         # μ: drift of the stock price
         # ν: long-term variance
         # κ: mean reversion rate
@@ -58,7 +66,8 @@ module SLVCTMCApproximation
         
         # Set the time step
         dt = T/N
-        if mode == "Kushner-Kushner"
+        if mode == "Explicit-Kushner"
+            bins = VolatilityBins(ν, ϱ, κ, v0)
             # Set the parameters for the Kushner-Kushner method
             # calculate the generator matrix Q for the Volatility process
         # Generate the stock price and variance paths
