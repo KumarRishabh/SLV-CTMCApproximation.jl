@@ -1,5 +1,27 @@
-module SLVCTMCApproximation
+@doc"""
+    SLVCTMCApproximation.jl
 
+# SLVCTMCApproximation.jl
+
+This Julia module is designed to approximate the Heston Stochastic Volatility model using the Continuous Time Markov Chain (CTMC) method. The Heston model is a mathematical model that describes the evolution of the volatility of an asset. It is particularly useful in the field of financial mathematics for pricing options and other financial derivatives.
+
+## Features
+
+- Approximation of the Heston Stochastic Volatility model using CTMC.
+- Support for different binning modes for volatility process discretization.
+
+## Functions
+
+- `VolatilityBins(ν, ϱ, κ, v; binning_mode = "uniform")`: Generates bins for the volatility process based on the specified parameters. Supports "uniform" and "Lo-Skindilias" binning modes.
+
+## Usage
+
+To use the `VolatilityBins` function, specify the long-term variance (`ν`), mean reversion rate (`ϱ`), volatility of the variance (`κ`), and the current variance (`v`). Optionally, specify the binning mode for the volatility process discretization.
+
+"""
+
+module SLVCTMCApproximation
+export VolatilityBins, HestonApproximation, SABRApproximation, ThreeTwoApproximation
 # Write your package code here.
 # Approximate the Heston Stochastic Volatility model using the CTMC method
 # The Heston model is given by the following SDEs:
@@ -43,6 +65,14 @@ module SLVCTMCApproximation
         return bins
     end
 
+    function SABRApproximation()
+    
+    end
+
+    function ThreeTwoApproximation()
+        
+    end
+
     function HestonApproximation(μ, ν, κ, ρ, ϱ, S0, v0, T, N, M; mode = "Explicit-Kushner")
         # μ: drift of the stock price
         # ν: long-term variance
@@ -66,6 +96,17 @@ module SLVCTMCApproximation
         
         # Set the time step
         dt = T/N
+        if mode == "Kushner-Kushner"
+            # use Zhenyu Cui's method to calculate the generator matrix Q for the Volatility process
+            bins = VolatilityBins(ν, ϱ, κ, v0)
+            Q = zeros(length(bins), length(bins))
+
+
+            # Set the parameters for the Kushner-Kushner method
+            # calculate the generator matrix Q for the Volatility process
+        
+        
+        else
         if mode == "Explicit-Kushner"
             bins = VolatilityBins(ν, ϱ, κ, v0)
             # Set the parameters for the Kushner-Kushner method
@@ -88,8 +129,4 @@ module SLVCTMCApproximation
     # Approximate the Three-Two model using the CTMC method
     # The Three-Two model is given by the following SDEs:
 
-    function ThreeTwoModelApproximation()
-
-
-    end
 end
