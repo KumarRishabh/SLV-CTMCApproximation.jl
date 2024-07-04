@@ -73,6 +73,37 @@ export VolatilityBins, HestonApproximation, SABRApproximation, ThreeTwoApproxima
         
     end
 
+    function calculateGenerator(ν, ϱ, κ, mean, std_dev; γ = 4)
+        # calculate the generator matrix Q for the Volatility process
+        # Set the number of bins
+        n = 100
+        # Set the minimum and maximum values for the volatility process
+        v_min = max(0.0001, mean - γ*std_dev)
+        v_max = mean + γ*std_dev
+        # Set the bin width
+        dv = (v_max - v_min)/n
+        # Initialize the generator matrix Q
+        Q = zeros(n, n)
+        # Set the bin vaues
+        for i in 1:n
+            # Calculate the transition rates for the volatility process
+            v_curr, v_next = v_min + (i - 1)*dv, v_min + i*dv
+            dv_curr, dv_next = dv, dv # For now, assume uniform bin width
+            if i == 1
+                Q[i, i + 1] = max(0, ν - ϱ*v_next)/dv_curr + (κ^2*v_next - dv_curr*max(0, ϱ*v_next - ν) + dv_next*max(0, ν - ϱ*v_next))/(dv_next*(dv_curr + dv_next))
+                Q[i, i] = -Q[i, i + 1]
+            elseif i == n
+                Q[i, i - 1] = max(0, ϱ*v_next - ν)/dv_next + (κ^2*v_next - dv_curr*max(0, ϱ*v_next - ν) + dv_next*max(0, ν - ϱ*v_next))/(dv_curr*(dv_curr + dv_next))
+                Q[i, i] = -Q[i, i - 1]
+            else
+                Q[i, i + 1] = max(0, ν - ϱ*v_next)/dv_curr + (κ^2*v_next - dv_curr*max(0, ϱ*v_next - ν) + dv_next*max(0, ν - ϱ*v_next))/(dv_next*(dv_curr + dv_next))
+                Q[i, i - 1] = max(0, ϱ*v_next - ν)/dv_next + (κ^2*v_next - dv_curr*max(0, ϱ*v_next - ν) + dv_next*max(0, ν - ϱ*v_next))/(dv_curr*(dv_curr + dv_next))
+                Q[i, i] = -Q[i, i + 1] - Q[i, i - 1]
+            end
+        end
+
+        return Q
+    end
     function HestonApproximation(μ, ν, κ, ρ, ϱ, S0, v0, T, N, M; mode = "Explicit-Kushner")
         # μ: drift of the stock price
         # ν: long-term variance
@@ -95,6 +126,8 @@ export VolatilityBins, HestonApproximation, SABRApproximation, ThreeTwoApproxima
         v[1, :] .= v0
         
         # Set the time step
+        # set the upper and lower bounds for the stock and volatility grids 
+
         dt = T/N
         if mode == "Kushner-Kushner"
             # use Zhenyu Cui's method to calculate the generator matrix Q for the Volatility process
