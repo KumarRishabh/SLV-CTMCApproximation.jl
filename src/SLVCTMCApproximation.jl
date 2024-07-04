@@ -73,7 +73,7 @@ export VolatilityBins, HestonApproximation, SABRApproximation, ThreeTwoApproxima
         
     end
 
-    function calculateGenerator(ν, ϱ, κ, mean, std_dev; γ = 4)
+    function calculatevolatilityGenerator(ν, ϱ, κ, mean, std_dev; γ = 4) # Calculate the Q matrix for the volatility process
         # calculate the generator matrix Q for the Volatility process
         # Set the number of bins
         n = 100
@@ -104,6 +104,66 @@ export VolatilityBins, HestonApproximation, SABRApproximation, ThreeTwoApproxima
 
         return Q
     end
+    @doc"""
+    # Calculate the generator matrix Q for the Price and Volatility process
+
+    After calculating the generator matrix Q for the Volatility process, we can calculate the generator matrix Q for the Price and Volatility process. 
+    The Price and Volatility process is given by the following SDEs in the Heston model:
+    
+    dS(t) = μS(t)dt + sqrt((1 - ρ^2)v(t))S(t)dW1(t) + ρ* sqrt(v(t))S(t)dW2(t)
+    dv(t) = (ν - ϱv(t))dt + κ*sqrt(v(t))dW2(t)
+    
+    where W1(t) and W2(t) are independent Brownian motions.
+
+    Consider a volatility process of the following form:
+    dv(t) = μ(t)dt + σ(t)dW(t)
+    
+    The volatility process can be approximated with a CTMC method with the following rates: 
+    
+    """
+    function calculateRegimeSwitchingGenerator(μ, ν, κ, ρ, ϱ, S0, v0, T, N, M; mode = "Explicit-Kushner")
+        
+        # μ: drift of the stock price
+        # ν: long-term variance
+        # κ: mean reversion rate
+        # ρ: correlation between the stock price and the variance
+        # ϱ: volatility of the variance
+        # S0: initial stock price
+        # v0: initial variance
+        # T: time horizon
+        # N: number of time steps
+        # M: number of Monte Carlo simulations
+        # Output: stock price and variance paths
+        # Modes of the CTMC method: "Kushner-Kushner", "Explicit-Kushner", "Explicit-MP"
+        # Initialize the stock price and variance paths
+        S = zeros(N+1, M)
+        v = zeros(N+1, M)
+        
+        # Set the initial stock price and variance
+        S[1, :] .= S0
+        v[1, :] .= v0
+        
+        # Set the time step
+        dt = T/N
+        if mode == "Kushner-Kushner"
+            # use Zhenyu Cui's method to calculate the generator matrix Q for the Volatility process
+            bins = VolatilityBins(ν, ϱ, κ, v0)
+            Q = zeros(length(bins), length(bins))
+            # Set the parameters for the Kushner-Kushner method
+            # calculate the generator matrix Q for the Volatility process
+            Q = calculatevolatilityGenerator(ν, ϱ, κ, v0, sqrt(v0))
+        else
+            if mode == "Explicit-Kushner"
+                bins = VolatilityBins(ν, ϱ, κ, v0)
+                # Set the parameters for the Kushner-Kushner method
+                # calculate the generator matrix Q for the Volatility process
+                Q = calculatevolatilityGenerator(ν, ϱ, κ, v0, sqrt(v0))
+            # Generate the stock price and variance paths
+            for i in 1:N
+                # Generate the stock price and variance paths using the CTMC method
+                for j in 1:M
+                    # Generate the stock price and variance paths using the CTMC method
+                    S[i+1, j] = S[i, j] + μ
     function HestonApproximation(μ, ν, κ, ρ, ϱ, S0, v0, T, N, M; mode = "Explicit-Kushner")
         # μ: drift of the stock price
         # ν: long-term variance
