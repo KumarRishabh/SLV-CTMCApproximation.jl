@@ -3,7 +3,7 @@ module OptionPricing
 # Write your package code here.
 
 function EuropeanCall()
-
+    
 end
 
 function EuropeanPut()
