@@ -3,7 +3,7 @@ module OptionPricing
 # Write your package code here.
 
 function EuropeanCall()
-    
+
 end
 
 function EuropeanPut()
@@ -33,4 +33,6 @@ end
 function BermudanPut()
 
 end
+
+function SAApproximation()
 end

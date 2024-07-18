@@ -1,26 +1,26 @@
-@doc"""
-    SLVCTMCApproximation.jl
+# @doc"""
+#     SLVCTMCApproximation.jl
 
-# SLVCTMCApproximation.jl
+# # SLVCTMCApproximation.jl
 
-This Julia module is designed to approximate the Heston Stochastic Volatility model using the Continuous Time Markov Chain (CTMC) method. The Heston model is a mathematical model that describes the evolution of the volatility of an asset. It is particularly useful in the field of financial mathematics for pricing options and other financial derivatives.
+# This Julia module is designed to approximate the Heston Stochastic Volatility model using the Continuous Time Markov Chain (CTMC) method. The Heston model is a mathematical model that describes the evolution of the volatility of an asset. It is particularly useful in the field of financial mathematics for pricing options and other financial derivatives.
 
-## Features
+# ## Features
 
-- Approximation of the Heston Stochastic Volatility model using CTMC.
-- Support for different binning modes for volatility process discretization.
+# - Approximation of the Heston Stochastic Volatility model using CTMC.
+# - Support for different binning modes for volatility process discretization.
 
-## Functions
+# ## Functions
 
-- `VolatilityBins(ν, ϱ, κ, v; binning_mode = "uniform")`: Generates bins for the volatility process based on the specified parameters. Supports "uniform" and "Lo-Skindilias" binning modes.
+# - `VolatilityBins(ν, ϱ, κ, v; binning_mode = "uniform")`: Generates bins for the volatility process based on the specified parameters. Supports "uniform" and "Lo-Skindilias" binning modes.
 
-## Usage
+# ## Usage
 
-To use the `VolatilityBins` function, specify the long-term variance (`ν`), mean reversion rate (`ϱ`), volatility of the variance (`κ`), and the current variance (`v`). Optionally, specify the binning mode for the volatility process discretization.
+# To use the `VolatilityBins` function, specify the long-term variance (`ν`), mean reversion rate (`ϱ`), volatility of the variance (`κ`), and the current variance (`v`). Optionally, specify the binning mode for the volatility process discretization.
 
-"""
+# """
 
-module SLVCTMCApproximation
+# module SLVCTMCApproximation
 using LinearAlgebra
 using Random
 using Distributions
@@ -28,7 +28,7 @@ using Plots
 using Parameters 
 using BenchmarkTools
 using StatsBase
-export VolatilityBins, HestonApproximation, SABRApproximation, ThreeTwoApproximation
+# export VolatilityBins, HestonApproximation, SABRApproximation, ThreeTwoApproximation
 # Write your package code here.
 # Approximate the Heston Stochastic Volatility model using the CTMC method
 # The Heston model is given by the following SDEs:
@@ -102,10 +102,11 @@ export VolatilityBins, HestonApproximation, SABRApproximation, ThreeTwoApproxima
         
     end
 
-    function calculatevolatilityGenerator(ν, ϱ, κ, mean, std_dev, T; γ = 2, num_bins = 100, epsilon = 0.0001) # Calculate the Q matrix for the volatility process
+    function calculatevolatilityGenerator(ν, ϱ, κ, v0, T; γ = 5, num_bins = 100, epsilon = 0.0001) # Calculate the Q matrix for the volatility process
         # calculate the generator matrix Q for the Volatility process
         # Set the number of bins
         n = num_bins
+        mean, std_dev = calculateSufficientStats(ν, ϱ, κ, v0, T)
         # Set the minimum and maximum values for the volatility process
         v_min = max(epsilon, mean - γ*std_dev) # MEAN AND STD_DEV ARE THE MEAN AND STD_DEV OF THE VOLATILITY PROCESS
         v_max = mean + γ*std_dev # MEAN AND STD_DEV ARE THE MEAN AND STD_DEV OF THE VOLATILITY PROCESS
@@ -114,7 +115,7 @@ export VolatilityBins, HestonApproximation, SABRApproximation, ThreeTwoApproxima
         # TODO: Use VolatilityBins function to generate the bins for the volatility process
         # These bings can be uniform or non-uniform according to various processes 
         # Initialize the generator matrix Q
-        volbins = VolatilityBins(v0, ν, ϱ, κ, T)
+        volbins = VolatilityBins(v0, ν, ϱ, κ, T, γ = γ, num_bins = num_bins)
 
         
         Q = zeros(n, n)
@@ -124,14 +125,14 @@ export VolatilityBins, HestonApproximation, SABRApproximation, ThreeTwoApproxima
             v_curr, v_next = v_min + (i - 1)*dv, v_min + i*dv
             dv_curr, dv_next = dv, dv # For now, assume uniform bin width
             if i == 1
-                Q[i, i + 1] = max(0, ν - ϱ*v_next)/dv_curr + (κ^2*v_next - dv_curr*max(0, ϱ*v_next - ν) + dv_next*max(0, ν - ϱ*v_next))/(dv_next*(dv_curr + dv_next))
+                Q[i, i + 1] = max(0, ν - ϱ*v_curr)/dv_next + (κ^2*v_curr - dv_curr*min(0, ν - ϱ*v_curr) - dv_next*max(0, ν - ϱ*v_curr))/(dv_next*(dv_curr + dv_next))
                 Q[i, i] = -Q[i, i + 1]
             elseif i == n
-                Q[i, i - 1] = max(0, ϱ*v_next - ν)/dv_next + (κ^2*v_next - dv_curr*max(0, ϱ*v_next - ν) + dv_next*max(0, ν - ϱ*v_next))/(dv_curr*(dv_curr + dv_next))
+                Q[i, i - 1] = min(0, ν - ϱ*v_curr)/dv_curr + (κ^2*v_curr - dv_curr*min(0, ν - ϱ*v_curr) - dv_next*max(0, ν - ϱ*v_curr))/(dv_curr*(dv_curr + dv_next))
                 Q[i, i] = -Q[i, i - 1]
             else
-                Q[i, i + 1] = max(0, ν - ϱ*v_next)/dv_curr + (κ^2*v_next - dv_curr*max(0, ϱ*v_next - ν) + dv_next*max(0, ν - ϱ*v_next))/(dv_next*(dv_curr + dv_next))
-                Q[i, i - 1] = max(0, ϱ*v_next - ν)/dv_next + (κ^2*v_next - dv_curr*max(0, ϱ*v_next - ν) + dv_next*max(0, ν - ϱ*v_next))/(dv_curr*(dv_curr + dv_next))
+                Q[i, i+1] = max(0, ν - ϱ * v_curr) / dv_next + (κ^2 * v_curr - dv_curr * min(0, ν - ϱ * v_curr) - dv_next * max(0, ν - ϱ * v_curr)) / (dv_next * (dv_curr + dv_next))
+                Q[i, i-1] = min(0, ν - ϱ * v_curr) / dv_curr + (κ^2 * v_curr - dv_curr * min(0, ν - ϱ * v_curr) - dv_next * max(0, ν - ϱ * v_curr)) / (dv_curr* (dv_curr + dv_next))
                 Q[i, i] = -Q[i, i + 1] - Q[i, i - 1]
             end
         end
@@ -182,7 +183,7 @@ export VolatilityBins, HestonApproximation, SABRApproximation, ThreeTwoApproxima
         if mode == "Kushner-Kushner"
             # use Zhenyu Cui's method to calculate the generator matrix Q for the Volatility process
             bins = VolatilityBins(ν, ϱ, κ, v0)
-            Q = zeros(length(bins), length(bins))
+            # Q = zeros(length(bins), length(bins))
             # Set the parameters for the Kushner-Kushner method
             # calculate the generator matrix Q for the Volatility process
             Q = calculatevolatilityGenerator(ν, ϱ, κ, v0)
@@ -306,6 +307,7 @@ function simulateQtransitions(Q, bins, T; v0 = 0.04)
         # Sample the next state
         # Update the current state
         # Update the time
+        println("Current State rate: ", Q[current_state, current_state])
         next_time = current_time + rand(Exponential(-1/Q[current_state, current_state]))
         # Calculate the transition probabilities
         e_i = (i, num_states) -> (e = zeros(Float64, num_states); e[i] = 1.0; e)
@@ -320,20 +322,25 @@ function simulateQtransitions(Q, bins, T; v0 = 0.04)
     return (state_transitions, transition_times)
 end
 
-function simulatePriceProcess(transition_times, μ, ν, ρ, κ, S0, v0)
+function simulatePriceProcess(transition_times, volatilitychain, μ, ν, ρ, κ, S0, v0)
     # Input: Q: Generator matrix for the Price process
     # bins: Bins for the price process
 # test the VolatilityGenerator function for some established parameters of the Heston Stochastic Volatility model
     # at every transition times, update the price process using the following equations 
     # S^{T_{i+1}} = S^{T_i} + μS^{T_i}dt + sqrt((1 - ρ^2)v^{T_i})S^{T_i}dW1 + ρ*sqrt(v^{T_i})S^{T_i}dW2
     log_prices = zeros(length(transition_times))
-    log_prices[1] = log(S0) + log()
+    dt = transition_times[1]
+    log_prices[1] = log(S0) + sqrt(1 - ρ^2)*sqrt(v0 * dt)*randn() + (μ - ν * ϱ / κ) * dt + (ρ*ϱ/κ - 0.5)*v0*dt + ρ/κ*0
     for i in 2:length(transition_times)
         dt = transition_times[i] - transition_times[i - 1]
-        log_prices[i] = log_prices[i - 1] + μ*exp(log_prices[i - 1])*dt + sqrt((1 - ρ^2)*exp(v0))*exp(log_prices[i - 1])*randn()*sqrt(dt) + ρ*sqrt(exp(v0))*exp(log_prices[i - 1])*randn()*sqrt(dt)
+        log_prices[i] = log_prices[i - 1] + sqrt(1 - ρ^2)*sqrt(volatilitychain[i] * dt)*randn() + (μ - ν * ϱ / κ) * dt + (ρ*ϱ/κ - 0.5)*volatilitychain[i]*dt + ρ/κ*(volatilitychain[i] - volatilitychain[i - 1])
     end
+    return log_prices
 end 
+
+# end 
 # Set the parameters for the Heston model
+
 PS1 = Dict(
     :S0 => 100,
     :μ => 0.02,
@@ -364,8 +371,13 @@ PS3 = Dict(:S0 => 100,
 )
 
 # Extract the parameters
-S0, μ, ν, ϱ, κ, ρ, v0 = PS3[:S0], PS3[:μ], PS3[:ν], PS3[:ϱ], PS3[:κ], PS3[:ρ], PS3[:V0]
-T = 1
+# S0, μ, ν, ϱ, κ, ρ, v0 = PS3[:S0], PS3[:μ], PS3[:ν], PS3[:ϱ], PS3[:κ], PS3[:ρ], PS3[:V0]
+# S0, μ, ν, ϱ, κ, ρ, v0 = PS3[:S0], PS3[:μ], PS3[:ν], PS3[:ϱ], PS3[:κ], PS3[:ρ], PS3[:V0]
+# Do this for Parameter Set 1
+# S0, μ, ν, ϱ, κ, ρ, v0 = PS1[:S0], PS1[:μ], PS1[:ν], PS1[:ϱ], PS1[:κ], PS1[:ρ], PS1[:V0]
+# Do this for Parameter Set 2
+S0, μ, ν, ϱ, κ, ρ, v0 = PS2[:S0], PS2[:μ], PS2[:ν], PS2[:ϱ], PS2[:κ], PS2[:ρ], PS2[:V0]
+T = 10
 volbins= VolatilityBins(v0, ν, ϱ, κ, T)
 # Sample volatility for volatility bins 
 
@@ -374,18 +386,33 @@ volbins= VolatilityBins(v0, ν, ϱ, κ, T)
 # The first bin that contains the initial volatility 
 print("Initial volatility bin: ", findfirst(volbins .>= v0))
 
-volbins[findfirst(volbins .> v0) - 1]
+# volbins[findfirst(volbins .> v0) - 1]
 # Calculate the bins for the volatility process
 bins = VolatilityBins(ν, ϱ, κ, v0, T)   
 
 mean, std_dev = calculateSufficientStats(ν, ϱ, κ, v0, T)
-Q = calculatevolatilityGenerator(ν, ϱ, κ, mean, std_dev, T)
-
+Q = calculatevolatilityGenerator(ν, ϱ, κ, v0, T, γ = 5, num_bins = 100)
+for i in 1:100
+    println(Q[i, i])
+end
 # Sample from the CTMC with Q as the generator matrix 
 
 state_transitions, transition_times = simulateQtransitions(Q, volbins, T, v0 = v0)
-length(state_transitions)
-length(transition_times)
+volatilitychain = volbins[state_transitions]
+logpriceprocess = simulatePriceProcess(transition_times, volatilitychain, μ, ν, ρ, κ, S0, v0)
+priceprocess = exp.(logpriceprocess)
+# length(state_transitions)
+# length(transition_times)
+volatilitychain
 
 
+function condition(bins, v0, ν, ϱ, κ)
+    # First calculate the max difference between the bins 
+    max_diff = maximum(diff(bins))
+    # Find the min ratio of volatilityto the modulus of the drift
+    min_ratio = minimum(κ^2 .* bins ./ abs.(ν .- ϱ .* bins))
 
+    return max_diff <= min_ratio
+end
+
+# calculateSufficientStats(ν, ϱ, κ, v0, T)[1]                                                               
