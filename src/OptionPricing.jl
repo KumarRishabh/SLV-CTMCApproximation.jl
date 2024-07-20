@@ -18,11 +18,13 @@ function AmericanPut()
 
 end
 
-function AsianCall()
+function AsianCall(StrikePrice, Premium)
+    return maximum(0, mean(StrikePrice .- Premium))
 
 end
 
-function AsianPut()
+function AsianPut(StrikePrice, Premium)
+    return maximum(0, mean(Premium .- StrikePrice)
 
 end
 

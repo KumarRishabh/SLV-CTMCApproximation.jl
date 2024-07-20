@@ -307,7 +307,7 @@ function simulateQtransitions(Q, bins, T; v0 = 0.04)
         # Sample the next state
         # Update the current state
         # Update the time
-        println("Current State rate: ", Q[current_state, current_state])
+        # println("Current State rate: ", Q[current_state, current_state])
         next_time = current_time + rand(Exponential(-1/Q[current_state, current_state]))
         # Calculate the transition probabilities
         e_i = (i, num_states) -> (e = zeros(Float64, num_states); e[i] = 1.0; e)
@@ -378,7 +378,7 @@ PS3 = Dict(:S0 => 100,
 # Do this for Parameter Set 2
 S0, μ, ν, ϱ, κ, ρ, v0 = PS2[:S0], PS2[:μ], PS2[:ν], PS2[:ϱ], PS2[:κ], PS2[:ρ], PS2[:V0]
 T = 10
-volbins= VolatilityBins(v0, ν, ϱ, κ, T)
+volbins= VolatilityBins(v0, ν, ϱ, κ, T, γ = 10, num_bins = 100)
 # Sample volatility for volatility bins 
 
 # Sample the volatility process
@@ -391,7 +391,7 @@ print("Initial volatility bin: ", findfirst(volbins .>= v0))
 bins = VolatilityBins(ν, ϱ, κ, v0, T)   
 
 mean, std_dev = calculateSufficientStats(ν, ϱ, κ, v0, T)
-Q = calculatevolatilityGenerator(ν, ϱ, κ, v0, T, γ = 5, num_bins = 100)
+Q = calculatevolatilityGenerator(ν, ϱ, κ, v0, T, γ = 10, num_bins = 100)
 for i in 1:100
     println(Q[i, i])
 end
@@ -405,7 +405,9 @@ priceprocess = exp.(logpriceprocess)
 # length(transition_times)
 volatilitychain
 
-
+# Plot the price process and the volatility process
+plot(transition_times, priceprocess, label = "Price Process", xlabel = "Time", ylabel = "Price", title = "Price Process vs Time")
+plot(transition_times, volatilitychain, label = "Volatility Process", xlabel = "Time", ylabel = "Volatility", title = "Volatility Process vs Time")
 function condition(bins, v0, ν, ϱ, κ)
     # First calculate the max difference between the bins 
     max_diff = maximum(diff(bins))
@@ -414,5 +416,6 @@ function condition(bins, v0, ν, ϱ, κ)
 
     return max_diff <= min_ratio
 end
+# This condition is satisfied. 
 
 # calculateSufficientStats(ν, ϱ, κ, v0, T)[1]                                                               
