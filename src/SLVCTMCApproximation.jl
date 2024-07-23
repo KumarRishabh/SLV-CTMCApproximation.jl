@@ -124,16 +124,16 @@ using StatsBase
             # Calculate the transition rates for the volatility process
             v_curr, v_next = v_min + (i - 1)*dv, v_min + i*dv
             dv_curr, dv_next = dv, dv # For now, assume uniform bin width
-            if i == 1
-                Q[i, i + 1] = max(0, ν - ϱ*v_curr)/dv_next + (κ^2*v_curr - dv_curr*min(0, ν - ϱ*v_curr) - dv_next*max(0, ν - ϱ*v_curr))/(dv_next*(dv_curr + dv_next))
+            if i == 1 # The case when j = i + 1
+                Q[i, i + 1] = max(0, ν - ϱ * v_curr)/dv_next + (κ^2*v_curr - dv_curr*max(0, ϱ*v_curr - ν) - dv_next*max(0, ν - ϱ*v_curr))/(dv_next*(dv_curr + dv_next))
                 Q[i, i] = -Q[i, i + 1]
-            elseif i == n
-                Q[i, i - 1] = min(0, ν - ϱ*v_curr)/dv_curr + (κ^2*v_curr - dv_curr*min(0, ν - ϱ*v_curr) - dv_next*max(0, ν - ϱ*v_curr))/(dv_curr*(dv_curr + dv_next))
+            elseif i == n # The case when j = i - 1
+                Q[i, i - 1] = max(0, ϱ*v_curr - ν)/dv_curr + (κ^2*v_curr - dv_curr*max(0, ϱ*v_curr - ν) - dv_next*max(0, ν - ϱ*v_curr))/(dv_curr*(dv_curr + dv_next))
                 Q[i, i] = -Q[i, i - 1]
             else
-                Q[i, i+1] = max(0, ν - ϱ * v_curr) / dv_next + (κ^2 * v_curr - dv_curr * min(0, ν - ϱ * v_curr) - dv_next * max(0, ν - ϱ * v_curr)) / (dv_next * (dv_curr + dv_next))
-                Q[i, i-1] = min(0, ν - ϱ * v_curr) / dv_curr + (κ^2 * v_curr - dv_curr * min(0, ν - ϱ * v_curr) - dv_next * max(0, ν - ϱ * v_curr)) / (dv_curr* (dv_curr + dv_next))
-                Q[i, i] = -Q[i, i + 1] - Q[i, i - 1]
+                Q[i, i+1] = max(0, ν - ϱ * v_curr) / dv_next + (κ^2 * v_curr - dv_curr * max(0, ϱ * v_curr - ν) - dv_next * max(0, ν - ϱ * v_curr)) / (dv_next * (dv_curr + dv_next))
+                Q[i, i-1] = max(0, ϱ * v_curr - ν) / dv_curr + (κ^2 * v_curr - dv_curr * max(0, ϱ * v_curr - ν) - dv_next * max(0, ν - ϱ * v_curr)) / (dv_curr * (dv_curr + dv_next))
+                Q[i, i] = -Q[i, i+1] - Q[i, i-1]
             end
         end
 
@@ -376,9 +376,12 @@ PS3 = Dict(:S0 => 100,
 # Do this for Parameter Set 1
 # S0, μ, ν, ϱ, κ, ρ, v0 = PS1[:S0], PS1[:μ], PS1[:ν], PS1[:ϱ], PS1[:κ], PS1[:ρ], PS1[:V0]
 # Do this for Parameter Set 2
-S0, μ, ν, ϱ, κ, ρ, v0 = PS2[:S0], PS2[:μ], PS2[:ν], PS2[:ϱ], PS2[:κ], PS2[:ρ], PS2[:V0]
-T = 10
-volbins= VolatilityBins(v0, ν, ϱ, κ, T, γ = 10, num_bins = 100)
+# S0, μ, ν, ϱ, κ, ρ, v0 = PS2[:S0], PS2[:μ], PS2[:ν], PS2[:ϱ], PS2[:κ], PS2[:ρ], PS2[:V0]
+# Do this for Parameter Set 3
+S0, μ, ν, ϱ, κ, ρ, v0 = PS3[:S0], PS3[:μ], PS3[:ν], PS3[:ϱ], PS3[:κ], PS3[:ρ], PS3[:V0]
+T = 100
+num_bins = 25
+volbins= VolatilityBins(v0, ν, ϱ, κ, T, γ = 10, num_bins = num_bins)
 # Sample volatility for volatility bins 
 
 # Sample the volatility process
@@ -391,8 +394,8 @@ print("Initial volatility bin: ", findfirst(volbins .>= v0))
 bins = VolatilityBins(ν, ϱ, κ, v0, T)   
 
 mean, std_dev = calculateSufficientStats(ν, ϱ, κ, v0, T)
-Q = calculatevolatilityGenerator(ν, ϱ, κ, v0, T, γ = 10, num_bins = 100)
-for i in 1:100
+Q = calculatevolatilityGenerator(ν, ϱ, κ, v0, T, γ = 10, num_bins = num_bins)
+for i in 1:num_bins
     println(Q[i, i])
 end
 # Sample from the CTMC with Q as the generator matrix 
