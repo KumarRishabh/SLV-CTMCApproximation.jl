@@ -36,5 +36,8 @@ function BermudanPut()
 
 end
 
-function SAApproximation()
+function StochasticApproximation(basis_functions, N, T; χ = 2.0, γ = 2)
+    # Define the basis functions
+    basis_functions = basis_functions
+    # Define the number of basis functions
 end

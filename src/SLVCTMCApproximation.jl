@@ -322,7 +322,7 @@ function simulateQtransitions(Q, bins, T; v0 = 0.04)
     return (state_transitions, transition_times)
 end
 
-function simulatePriceProcess(transition_times, volatilitychain, μ, ν, ρ, κ, S0, v0)
+function simulatePriceProcess(transition_times, volatilitychain, μ, ν, ρ, κ, S0, v0) # Using the explicit price formula
     # Input: Q: Generator matrix for the Price process
     # bins: Bins for the price process
 # test the VolatilityGenerator function for some established parameters of the Heston Stochastic Volatility model
@@ -330,14 +330,19 @@ function simulatePriceProcess(transition_times, volatilitychain, μ, ν, ρ, κ,
     # S^{T_{i+1}} = S^{T_i} + μS^{T_i}dt + sqrt((1 - ρ^2)v^{T_i})S^{T_i}dW1 + ρ*sqrt(v^{T_i})S^{T_i}dW2
     log_prices = zeros(length(transition_times))
     dt = transition_times[1]
-    log_prices[1] = log(S0) + sqrt(1 - ρ^2)*sqrt(v0 * dt)*randn() + (μ - ν * ϱ / κ) * dt + (ρ*ϱ/κ - 0.5)*v0*dt + ρ/κ*0
+    log_prices[1] = log(S0) + sqrt(1 - ρ^2)*sqrt(v0 * dt)*randn() + (μ - ν * ϱ / κ) * dt + (ρ*ϱ/κ -  0.5)*v0*dt + ρ/κ*(volatilitychain[1] - v0)
     for i in 2:length(transition_times)
         dt = transition_times[i] - transition_times[i - 1]
-        log_prices[i] = log_prices[i - 1] + sqrt(1 - ρ^2)*sqrt(volatilitychain[i] * dt)*randn() + (μ - ν * ϱ / κ) * dt + (ρ*ϱ/κ - 0.5)*volatilitychain[i]*dt + ρ/κ*(volatilitychain[i] - volatilitychain[i - 1])
+        change = sqrt(1 - ρ^2)*sqrt(volatilitychain[i-1] * dt)*randn() + (μ - ν * ϱ / κ) * dt + (ρ*ϱ/κ - 0.5)*volatilitychain[i-1]*dt + ρ/κ*(volatilitychain[i] - volatilitychain[i - 1])
+        log_prices[i] = log_prices[i - 1] + change
+        println("Change @ $i: ", change)
     end
     return log_prices
 end 
 
+# function simulatePriceProcessRegimeSwitching(transition_times, volatilitychain, μ, ν, ρ, κ, S0, v0) # Using the Regime Switching formula
+#     # Input: Q: Generator matrix for the Price process
+    
 # end 
 # Set the parameters for the Heston model
 
@@ -352,7 +357,7 @@ PS1 = Dict(
 )
 
 PS2 = Dict(
-    :S0 => 100,
+    :S0 => 2,
     :μ=> 0.02,
     :ν => 0.424,
     :ϱ => 6.00,
@@ -376,10 +381,10 @@ PS3 = Dict(:S0 => 100,
 # Do this for Parameter Set 1
 # S0, μ, ν, ϱ, κ, ρ, v0 = PS1[:S0], PS1[:μ], PS1[:ν], PS1[:ϱ], PS1[:κ], PS1[:ρ], PS1[:V0]
 # Do this for Parameter Set 2
-# S0, μ, ν, ϱ, κ, ρ, v0 = PS2[:S0], PS2[:μ], PS2[:ν], PS2[:ϱ], PS2[:κ], PS2[:ρ], PS2[:V0]
+S0, μ, ν, ϱ, κ, ρ, v0 = PS2[:S0], PS2[:μ], PS2[:ν], PS2[:ϱ], PS2[:κ], PS2[:ρ], PS2[:V0]
 # Do this for Parameter Set 3
-S0, μ, ν, ϱ, κ, ρ, v0 = PS3[:S0], PS3[:μ], PS3[:ν], PS3[:ϱ], PS3[:κ], PS3[:ρ], PS3[:V0]
-T = 100
+# S0, μ, ν, ϱ, κ, ρ, v0 = PS3[:S0], PS3[:μ], PS3[:ν], PS3[:ϱ], PS3[:κ], PS3[:ρ], PS3[:V0]
+T = 10
 num_bins = 25
 volbins= VolatilityBins(v0, ν, ϱ, κ, T, γ = 10, num_bins = num_bins)
 # Sample volatility for volatility bins 
@@ -419,6 +424,13 @@ function condition(bins, v0, ν, ϱ, κ)
 
     return max_diff <= min_ratio
 end
+
+function integerCondition(ν, κ)
+    # First calculate the max difference between the bins 
+    return 4*ν/κ^2
+end
+
+integerCondition(ν, κ)
 # This condition is satisfied. 
 
 # calculateSufficientStats(ν, ϱ, κ, v0, T)[1]                                                               
