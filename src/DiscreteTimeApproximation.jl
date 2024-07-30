@@ -1,4 +1,4 @@
-using Random, Statistics, LinearAlgebra, Plots, PyCall
+using Random, Statistics, LinearAlgebra, Plots, PyCall, PrettyTables
 np = pyimport("numpy")
 function branching_particle_filter(S_0, V_0, N, T, r, params, n, delta_t; seed = 42)
     np.random.seed(seed) # set the seed for reproducibility with PyCall & numpy
@@ -103,11 +103,21 @@ T, delta_t, n = 200, 1, 20
 S_0, V_0, N, r = 100, 0.04, 200, 1.4
 
 params = Dict(
-    "mu" => -0.04, 
+    "mu" => -0.5, 
     "nu" => 0.01,
     "mean_reversion_coeff" => 5.3,
     "rho" => -0.7,
     "kappa" => -0.5
+)
+
+PS_1 = Dict(
+    # "S_0" => 100,
+    # "V_0" => 0.501,
+    "mu" => 0.02, 
+    "nu" => 0.085, 
+    "mean_reversion_coeff" => 6.21, 
+    "rho" => -0.7, 
+    "kappa" => 0.2
 )
 @time logS_history, V_history, logL_history = branching_particle_filter(S_0, V_0, N, T, r, params, n, delta_t)
 output_file = "/Users/rishabhkumar/SLV-CTMCApproximation.jl/src/output.txt"
@@ -135,59 +145,82 @@ function weighted_heston(S_0, V_0, n, N, M, T, params; epsilon=1e-3)
     logS = zeros(Float64, T + 1, N)
     logL = zeros(Float64, T + 1, N)
     stoppingtimes = zeros(Int, N)
-    Y = zeros(Float64, M * (T + 1) + 1, N, n)
-    V = zeros(Float64, M * (T + 1) + 1, N)
+    Y = zeros(Float64, M * (T) + 1, N, n)
+    V = zeros(Float64, M * (T) + 1, N)
     
     # '''Initialization'''
     logS[1, :] = log.(S_0 * ones(N))
-    logL[1, :] .= 0 
-    stoppingtimes .= T
+    logL[1, :] .= 0
+    V[1, :] .= V_0 
+    stoppingtimes .= T +1
     Y[1, :, :] = (sqrt(V_0 / n)) * ones((N, n))
     
     for t in 2:T+1
         for k in M-1:-1:0
             Z = randn(N, n)
-            Y[t * M - k, :, :] = alpha * Y[t * M - (k+1), :, :] + sigma * Z
-            V[t * M - k, :] = V[t * M - k, :] + sum(Y[t * M - k, :, :].^2, dims=2)
+            Y[(t - 1)* M - k + 1, :, :] = alpha * Y[(t - 1) * M - k, :, :] + sigma * Z
+            V[(t - 1) * M - k + 1, :] = V[(t - 1) * M - k + 1, :] + sum(Y[(t - 1)* M - k + 1, :, :].^2, dims=2)
         end
         
-        IntV = (reshape(sum(V[((t-1)*M+1):(t * M + 1), :], dims=1), N) + reshape(sum(V[((t - 1) * M + 2):( t * M), :], dims=1), N) + 2 * (V[((t - 1)* M + 2 ), :] + V[t * M, :])) ./ (3 * M)
+        IntV = (reshape(sum(V[((t-2)*M+1):((t - 1)* M + 1), :], dims=1), N) + reshape(sum(V[((t - 2) * M + 2):( (t - 1)* M), :], dims=1), N) + 2 * (V[((t - 2)* M + 2 ), :] + V[(t - 1) * M, :])) ./ (3 * M)
         # IntV = (sum(V[(t-1)*M+1:t*M+1, :], dims=1) + sum(V[(t-1)*M+2:t*M, :], dims=1) + 2 * (V[(t-1)*M+2, :] + V[t * M, :])) ./ (3 * M)
         # println("IntV: $IntV")
-        Nsample = a * sqrt.(IntV) .* randn(N)
-        logS[t, :] = logS[t-1, :] .+ Nsample .+ b .+ c * IntV .+ d .* (V[t * M + 1, :] .- V[(t-1) * M + 1, :])
+        Nsample = a .* sqrt.(IntV) .* randn(N)
+        logS[t, :] = logS[t-1, :] .+ Nsample .+ b .+ c * IntV .+ d .* (V[(t - 1) * M + 1, :] .- V[(t-2) * M + 1, :])
         
         # '''Iterating over particles'''
         for j in 1:N
             if t <= stoppingtimes[j]
-                if minimum(V[(t-1)*M+1:t*M, j]) > epsilon
-                    IntVinv = (sum(1 ./ V[(t-1)*M+1:t*M+1, j]) + sum(1 ./ V[(t-1)*M+2:t*M, j]) + 2 * (1 / V[(t-1)*M+2, j] + 1 / V[t*M, j])) / (3 * M)
-                    logL[t, j] = logL[t-1, j] + e * (log(V[t*M + 1, j] / V[(t-1)*M + 1, j]) + mrc) + f* IntVinv
+                if minimum(V[(t-2)*M+1:(t-1)*M, j]) > epsilon
+                    IntVinv = (sum(1 ./ V[(t-2)*M+1:(t-1)*M+1, j]) + sum(1 ./ V[(t-2)*M+2:(t - 1)*M, j]) + 2 * (1 / V[(t-2)*M+2, j] + 1 / V[(t - 1)*M, j])) / (3 * M)
+                    logL[t, j] = logL[t-1, j] + e * (log(V[(t - 1)*M + 1, j] / V[(t-2)*M + 1, j]) + mrc) + f* IntVinv
                 else
                     stoppingtimes[j] = t - 1
                 end
             end
         end
     end
-    
-    return (logS, V, logL)
+    V_history = zeros(T + 1, N) 
+    V_history .= V[1:M:((T)*M + 1), :]
+    return (exp.(logS), V_history, logL)
 end
 
-S_0, V_0, n, N, T = 100, 0.04, 20, 20, 100
-logS_history, V_history, logL_history = weighted_heston(S_0, V_0, n, N, 6, T, params)
-for i in 1:T+1
-    println(logS_history[i, :])
-end
+S_0, V_0, n, N, T = 100, 0.02, 20, 1000, 10
+S_history, V_history, logL_history = weighted_heston(S_0, V_0, n, N, 6, T, PS_1)
+# for i in 1:T+1
+#     println(logS_history[i, :])
+# end
 
-p =plot(1:T+1, logS_history, xlabel = "Time", ylabel = "Log Stock Prices", title = "Log Stock Prices vs Time")
+# for i in 1:T+1
+#     println(V_history[i, :])
+# end
+
+# for i in 1:T+1
+#     println(logL_history[i, :])
+# end
+
+p =plot(1:T+1, S_history, xlabel = "Time", ylabel = "Log Stock Prices", title = "Log Stock Prices vs Time")
 display(p)
 # logS_history[1]
 
 
 function StochasticApproximation(basis_functions, N, T; χ = 2.0, γ = 2)
-    λ = 0.0, 
+    λ = 0.0, ζ = 0  
     # Implement the stochastic approximation algorithm for pricing American Call options
 end
 
-np.random.seed(42)
-samples = np.random.randn(20)
+
+# Example values
+T = 10
+M = 2
+V = rand(22, 5)  # Random matrix with 22 rows and 5 columns
+
+# Create V_history with appropriate dimensions
+V_history = zeros(Float64, div((T+1)*M + 1, M), size(V, 2))
+# Perform the operation
+V_history .= V[1:M:((T)*M + 1), :]
+
+# Print the result
+# println(V_history)
+# pretty print V_history
+pretty_table(V_history)
