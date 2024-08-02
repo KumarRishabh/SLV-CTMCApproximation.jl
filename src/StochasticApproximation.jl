@@ -40,3 +40,11 @@ function Laguerre_Polynomials_3D(n, x::Tuple{<:Real, <:Real, <:Real}) # x is a t
 end
    
 
+# Employ a symbolic approach to calculate the Laguerre_Polynomials
+
+
+
+# Consider the asset price follows a Geometric Brownian Motion
+# Employ a Monte Carlo Simulation to calculate the price of a European Call Option
+# And then, change the strike price to get 
+

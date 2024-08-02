@@ -185,8 +185,65 @@ function weighted_heston(S_0, V_0, n, N, M, T, params; epsilon=1e-3)
     return (exp.(logS), V_history, logL)
 end
 
-S_0, V_0, n, N, T = 100, 0.02, 20, 1000, 10
-S_history, V_history, logL_history = weighted_heston(S_0, V_0, n, N, 6, T, PS_1)
+
+function weighted_heston_new_indexing(S_0, V_0, n, N, M, T, params; epsilon=1e-3)
+    # 
+    # Theorem 1 computations
+    # 
+    # Here M is the grid size for the time discretization
+    # N is the number of particles
+    # n is the number of factors
+    mu, nu, mrc, rho, kappa = params["mu"], params["nu"], params["mean_reversion_coeff"], params["rho"], params["kappa"]
+    nu_k = max(Int(floor(4 * nu / kappa^2 + 0.5)), 1)
+    a, b, c, d, e = sqrt(1 - rho^2), mu - nu * rho / kappa, rho * mrc / kappa - 0.5, rho / kappa, (nu - nu_k) / kappa^2
+    f = e * (kappa^2 - nu - nu_k) / 2
+    sigma = kappa * sqrt((1 - exp(-mrc / M)) / (4 * mrc))
+    alpha = exp(-mrc / (2 * M))
+    logS = zeros(Float64, N, T + 1)
+    logL = zeros(Float64, N, T + 1)
+    stoppingtimes = zeros(Int, N)
+    Y = zeros(Float64, N, n, M * (T) + 1)
+    V = zeros(Float64, N, M * (T) + 1)
+
+    # '''Initialization'''
+    logS[:, 1] = log.(S_0 * ones(N))
+    logL[:, 1] .= 0
+    V[:, 1] .= V_0
+    stoppingtimes .= T + 1
+    Y[:, :, 1] = (sqrt(V_0 / n)) * ones((N, n))
+
+    for t in 2:T+1
+        for k in M-1:-1:0
+            Z = randn(N, n)
+            Y[:, :, (t-1)*M-k+1] = alpha * Y[:, :, (t-1)*M-k] + sigma * Z
+            V[:, (t-1)*M-k+1] = V[:, (t-1)*M-k+1] + sum(Y[:, :, (t-1)*M-k+1] .^ 2, dims=2)
+        end
+
+        IntV = (reshape(sum(V[:, ((t-2)*M+1):((t-1)*M+1)], dims=2), N) + reshape(sum(V[:, ((t-2)*M+2):((t-1)*M)], dims=2), N) + 2 * (V[:, ((t-2)*M+2)] + V[:, (t-1)*M])) ./ (3 * M)
+        # IntV = (sum(V[:, (t-1)*M+1:t*M+1], dims=2) + sum(V[:, (t-1)*M+2:t*M], dims=2) + 2 * (V[:, (t-1)*M+2] + V[:, t*M])) ./ (3 * M)
+        # println("IntV: $IntV")
+        Nsample = a .* sqrt.(IntV) .* randn(N)
+        logS[:, t] = logS[:, t-1] .+ Nsample .+ b .+ c * IntV .+ d .* (V[:, (t-1)*M+1] .- V[:, (t-2)*M+1])
+
+        # '''Iterating over particles'''
+        for j in 1:N
+            if t <= stoppingtimes[j]
+                if minimum(V[j, (t-2)*M+1:(t-1)*M]) > epsilon
+                    IntVinv = (sum(1 ./ V[j, (t-2)*M+1:(t-1)*M+1]) + sum(1 ./ V[j, (t-2)*M+2:(t-1)*M]) + 2 * (1 / V[j, (t-2)*M+2] + 1 / V[j, (t-1)*M])) / (3 * M)
+                    logL[j, t] = logL[j, t-1] + e * (log(V[j, (t-1)*M+1] / V[j, (t-2)*M+1]) + mrc) + f * IntVinv
+                else
+                    stoppingtimes[j] = t - 1
+                end
+            end
+        end
+    end
+    V_history = zeros(N, T + 1)
+    V_history .= V[:, 1:M:((T)*M+1)]
+    return (exp.(logS), V_history, logL)
+end
+
+S_0, V_0, n, N, T = 100, 0.501, 20, 1000, 10
+S_history, V_history, logL_history = weighted_heston_new_indexing(S_0, V_0, n, N, 6, T, PS_1)
 # for i in 1:T+1
 #     println(logS_history[i, :])
 # end
@@ -199,7 +256,9 @@ S_history, V_history, logL_history = weighted_heston(S_0, V_0, n, N, 6, T, PS_1)
 #     println(logL_history[i, :])
 # end
 
-p =plot(1:T+1, S_history, xlabel = "Time", ylabel = "Log Stock Prices", title = "Log Stock Prices vs Time")
+print(S_history[:, 1]')
+p =plot(1:T+1, S_history', xlabel = "Time", ylabel = "Log Stock Prices", title = "Log Stock Prices vs Time")
+plot(1:T+1, V_history', xlabel = "Time", ylabel = "Volatilities", title = "Volatilities vs Time")
 display(p)
 # logS_history[1]
 
@@ -224,3 +283,59 @@ V_history .= V[1:M:((T)*M + 1), :]
 # println(V_history)
 # pretty print V_history
 pretty_table(V_history)
+
+# Kahl, C., & Jäckel, P. (2006). Fast strong approximation Monte Carlo schemes for stochastic volatility models. Quantitative Finance, 6(6), 513–536. https://doi.org/10.1080/14697680600841108
+function HestonDiscretizationKahlJackel(S0, V0, T, N, params, Δt = 1e-6)
+    # Implement the Heston Discretization using the Kahl-Jackel method
+    V = zeros(Float64, N, T+1)
+    logS = zeros(Float64, N, T+1)
+    V[:, 1] .= V0
+    logS[:, 1] .= log(S0)
+    # Implement the Heston Discretization using the Kahl-Jackel method
+    for i in 1:N
+        for j in 2:T+1
+            Δβ = sqrt(Δt) * randn()
+            ΔB = sqrt(Δt) * randn() # independent brownian motions
+            V[i, j] = V[i, j-1] + (params["nu"] - params["mean_reversion_coeff"] * V[i, j-1]) * Δt + params["kappa"] * sqrt(V[i, j-1]) * Δβ + 0.25 * params["kappa"]^2 * (Δβ^2 - Δt)
+            Δβ = 0.04
+            logS[i, j] = logS[i, j-1] + params["mu"] * Δt - 0.25 * (V[i, j-1] + V[i, j]) * Δt + params["rho"] * sqrt(V[i, j-1]) * Δβ + 0.5 * (sqrt(V[i, j-1]) + sqrt(V[i, j]))*(ΔB - params["rho"] * Δβ) + 0.25 * params["rho"] *(Δβ - Δt)
+        end
+    end
+    return exp.(logS), V
+end
+
+function KahlJackelVectorized(S0, V0, T, N, params, Δt = 1e-6)
+    V = zeros(Float64, N, T+1)
+    logS = zeros(Float64, N, T+1)
+    V[:, 1] .= V0
+    logS[:, 1] .= log(S0)
+    Δβ = sqrt(Δt) * randn(N, T)
+    ΔB = sqrt(Δt) * randn(N, T)
+    for j in 2:T+1
+        V[:, j] = V[:, j-1] + (params["nu"] .- params["mean_reversion_coeff"] .* V[:, j-1]) * Δt + params["kappa"] .* sqrt.(V[:, j-1]) .* Δβ[:, j-1] + 0.25 * params["kappa"]^2 .* (Δβ[:, j-1].^2 .- Δt)
+        logS[:, j] = logS[:, j-1] .+ params["mu"] * Δt .- 0.25 .* (V[:, j-1] + V[:, j]) .* Δt + params["rho"] .* sqrt.(V[:, j-1]) .* Δβ[:, j - 1] .+ 0.5 .* (sqrt.(V[:, j-1]) + sqrt.(V[:, j])) .* (ΔB[:, j-1] - params["rho"] .* Δβ[:, j - 1]) .+ 0.25 .* params["rho"] .* (Δβ[:, j - 1] .- Δt)
+    end
+    return exp.(logS), V
+end
+
+function KahlJackelVectorizedDixit(S0, V0, T, N, params, Δt = 1e-6)
+    V = zeros(Float64, N, T+1)
+    logS = zeros(Float64, N, T+1)
+    V[:, 1] .= V0
+    logS[:, 1] .= log(S0)
+    Δβ = sqrt(Δt) * randn(N, T)
+    ΔB = sqrt(Δt) * randn(N, T)
+    for j in 2:T+1
+        prevV = V[:, j-1]
+        prevβ = Δβ[:, j-1]
+        @. @view(V[:, j]) = prevV + (params["nu"] - params["mean_reversion_coeff"] * prevV) * Δt + params["kappa"] * sqrt(prevV) * prevβ + 0.25 * params["kappa"]^2 * (prevβ^2 - Δt)
+        @. @view(logS[:, j]) = logS[:, j-1] + params["mu"] * Δt - 0.25 * (prevV + V[:, j]) * Δt + params["rho"] * sqrt(prevV) *  + 0.5 * (sqrt(prevV) + sqrt(V[:, j])) * (ΔB[:, j-1] - params["rho"] * prevβ) + 0.25 * params["rho"] * (prevβ - Δt)
+    end
+    return exp.(logS), V
+end
+S0, V0, T, N = 100, 0.501, 100000, 100
+  
+@time S_1, V_1 = HestonDiscretizationKahlJackel(S0, V0, T, N, params)
+@time S_2, V_2 = KahlJackelVectorized(S0, V0, T, N, params)
+@time S_3, V_3 = KahlJackelVectorizedDixit(S0, V0, T, N, params)
+plot(1:T+1, S_2', xlabel = "Time", ylabel = "Stock Prices", title = "Stock Prices vs Time")
