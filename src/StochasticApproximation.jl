@@ -27,7 +27,7 @@ function Laguerre_Polynomials_3D(n, x::Tuple{<:Real, <:Real, <:Real}) # x is a t
         L[1, i, 1] = ((2*(i-1) + 1 - x[2]) * L[1, i-1, 1] - (i-1) * L[1, i-2, 1]) / i
         L[1, 1, i] = ((2*(i-1) + 1 - x[3]) * L[1, 1, i-1] - (i-1) * L[1, 1, i-2]) / i
     end
-    for i in 2:n+1
+    for i in 2:n+1     
         for j in 2:n+1
             for k in 2:n+1
                 L[i, j, k] = ((2*(i-1) + 1 - x[1]) * L[i-1, j, k] - (i-1) * L[i-2, j, k]) / i
