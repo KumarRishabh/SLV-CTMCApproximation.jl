@@ -1,11 +1,15 @@
+
+
+module DiscreteTimeApproximation
 using Random, Statistics, LinearAlgebra, Plots, PyCall, PrettyTables
 using Distributions
-np = pyimport("numpy")
-function branching_particle_filter(S_0, V_0, N, T, r, params, n, delta_t; seed = 42)
-    np.random.seed(seed) # set the seed for reproducibility with PyCall & numpy
+
+
+
+function branching_particle_filter(S_0, V_0, N, T, r, params, n; delta_t = 1)
     mu, nu, mrc, rho, kappa = params["mu"], params["nu"], params["mean_reversion_coeff"], params["rho"], params["kappa"]
 
-    nu_k = max(round(4 * nu / kappa^2 + 0.5), 1)
+    nu_k = max(round(Int, 4 * nu / kappa^2 + 0.5), 1)
     a, b, c, d, e = sqrt(1 - rho^2), mu - nu * rho / kappa, rho * mrc / kappa - 0.5, rho / kappa, (nu - nu_k) / kappa^2
     f = e * (kappa^2 - nu - nu_k) / 2
 
@@ -22,22 +26,20 @@ function branching_particle_filter(S_0, V_0, N, T, r, params, n, delta_t; seed =
 
     V = V_history[1] = Vhat
     logS = logS_history[1] = logShat
-    logL = logL_history[1] = zeros(num_particles)
+    logL = logL_history[1] = logLhat
 
     Y = sqrt(V_0 / n) * ones(num_particles, n)
     for t in 2:T+1
         num_particles_ = 0
-        Y = exp(-mrc / 2) .* ((kappa / 2) .* np.random.randn(num_particles, n) .* sqrt(delta_t) .+ Y)
-        Vhat = sum(Y .^ 2, dims=2)
+        # Y = exp(-mrc / 2) * ((kappa / 2) * randn(num_particles, n) * sqrt(delta_t) + Y)
+        Y = -mrc/2 .* Y .* delta_t .+ kappa/2 .* randn(num_particles, n) .* sqrt(delta_t) .+ Y
+        Vhat = sum(Y.^2, dims=2)
 
-        logShat = logS .+ (a .* sqrt.(V .* delta_t) .* np.random.randn(num_particles) .+ b * (Vhat .- V) .* delta_t .+ d .* (Vhat .- V))
-        logLhat = logL .+ (e .* (log.(Vhat ./ V) .+ mrc) .+ f * (1 ./ Vhat .- 1 ./ V) .* delta_t)
-        # println("At iteration $t: $logShat")
+        logShat = [logS[i] + (a * sqrt(V[i] * delta_t) * randn() + b + c* (Vhat[i] - V[i]) * delta_t + d * (Vhat[i] - V[i])) for i in 1:num_particles]
+        logLhat = [logL[i] + (e * (log(Vhat[i] / V[i]) + mrc) + f * (1 / Vhat[i] - 1 / V[i]) * delta_t) for i in 1:num_particles]
         logLhat = log.(exp.(logLhat) ./ sum(exp.(logLhat)))
-        
-        # println("At iteration $t: LogLHat is $logLhat")
-        # println("At iteration $t: $logLhat")
-        # print the shape of logLhat
+        # convert Vhat to a vector 
+        Vhat = reshape(Vhat, num_particles)
         A[t] = sum(exp.(logLhat)) / N
 
         logS, V, logL = [], [], []
@@ -53,107 +55,43 @@ function branching_particle_filter(S_0, V_0, N, T, r, params, n, delta_t; seed =
                 end
             else
                 l += 1
-                if l <= length(logS)
-                    logShat[l], Vhat[l], logLhat[l] = logShat[j], Vhat[j], logLhat[j]
+                if l > length(logS)
+                    push!(logShat, logShat[j])
+                    push!(Vhat, Vhat[j])
+                    push!(logLhat, logLhat[j])
                 else
-                    logShat = vcat(logShat, logShat[j]) # since logShat is a matrix, we need to append a row to it rather than treat it as a vector
-                    # since logShat is a matrix, we need to append a row to it rather than treat it as a vector
-                    Vhat = vcat(Vhat, Vhat[j])
-                    logLhat = vcat(logLhat, logLhat[j])
+                    logShat[l], Vhat[l], logLhat[l] = logShat[j], Vhat[j], logLhat[j]
                 end
             end
         end
-
         num_particles_ = num_particles - l
-        W = np.random.rand(l) / (l)
-        W = np.array([W[i] + i / (l) for i in 1:l]) # Stratified Uniform samples
-        U = np.random.permutation(W)
+        W = rand(l) / l
+        W = [W[i] + i / l for i in 1:l]
+        U = randperm(l)
         for j in 1:l
-            N_j = round(exp(logLhat[j]) / A[t]) + (
-                if U[j] <= exp(logLhat[j]) / A[t] - round(exp(logLhat[j]) / A[t])
-                    1
-                else
-                    0
-                end
-            )
+            N_j = floor(exp(logLhat[j]) / A[t]) + (U[j] <= exp(logLhat[j]) / A[t] - floor(exp(logLhat[j]) / A[t]) ? 1 : 0)
             for k in 1:N_j
                 push!(logS, logShat[j])
                 push!(V, Vhat[j])
                 push!(logL, log(A[t]))
-                # println("Particle $k in iteration $t: $N_j")
-                num_particles_ += 1
             end
-            # println("Particles in iteration $t: $num_particles_")
+            num_particles_ += N_j
         end
-
-        num_particles = copy(num_particles_)
-        println("Particles in iteration $t: $num_particles")
-        logS_history[t] = copy(logS)
-        V_history[t] = copy(V)
-        logL_history[t] = copy(logL)
-
-        V = Vhat = convert(Array, V)
-        logS = logShat = convert(Array, logS)
-        logL = logLhat = convert(Array, logL)
+        num_particles = Int(num_particles_)
+        println("Particles: ", num_particles)
+        logS_history[t] = logS
+        V_history[t] = V
+        logL_history[t] = logL
+        V = Vhat = convert(Vector{Float64}, V)
+        logS = logShat = convert(Vector{Float64}, logS)
+        logL = logLhat = convert(Vector{Float64}, logL)
         Y = sqrt.(Vhat / n) .* ones(num_particles, n)
     end
-    return logS_history, V_history, logL_history
+    return (logS_history, V_history, logL_history)
 end
-
-T, delta_t, n = 200, 1, 20
-S_0, V_0, N, r = 100, 0.04, 200, 1.4
-
-params = Dict(
-    # "S_0" => 100,
-    # "V_0" => 0.501,
-    "mu" => -0.5, 
-    "nu" => 0.01,
-    "mean_reversion_coeff" => 5.3,
-    "rho" => -0.7,
-    "kappa" => -0.5
-)
-
-PS_1 = Dict(
-    # "S_0" => 100,
-    # "V_0" => 0.501,
-    "mu" => 0.02, 
-    "nu" => 0.085, 
-    "mean_reversion_coeff" => 6.21, # ϱ
-    "rho" => -0.7, 
-    "kappa" => 0.2
-)
-
-PS_2 = Dict(
-    # "S_0" => 100,
-    # "V_0" => 0.11,
-    "mu" => 0.02, 
-    "nu" => 0.424, 
-    "mean_reversion_coeff" => 6.00, # ϱ
-    "rho" => -0.75, 
-    "kappa" => 0.8
-)
-
-PS_3 = Dict(
-    # "S_0" => 100,
-    # "V_0" => 0.501,
-    "mu" => 0.02, 
-    "nu" => 0.225, 
-    "mean_reversion_coeff" => 2.86, # ϱ
-    "rho" => -0.96, 
-    "kappa" => 0.6
-)
 
 # mean_reversion_coefficient -> ϱ
-@time logS_history, V_history, logL_history = branching_particle_filter(S_0, V_0, N, T, r, params, n, delta_t)
-output_file = "/Users/rishabhkumar/SLV-CTMCApproximation.jl/src/output.txt"
-open(output_file, "w") do file
-    for i in 1:T+1
-        println(file, "At iteration $i: LogStockPrices: $(logS_history[i])")
-        println(file, "At iteration $i: Volatilities: $(V_history[i])")
-        println(file, "At iteration $i: LogLikelihoods: $(logL_history[i])")
-    end
-end
-# plot the logS_history with respect to time for each particle in the simulation
+
 function weighted_heston(S_0, V_0, n, N, M, T, params; epsilon=1e-3) # Does it work? 
     # 
     # Theorem 1 computations
@@ -162,12 +100,12 @@ function weighted_heston(S_0, V_0, n, N, M, T, params; epsilon=1e-3) # Does it w
     # N is the number of particles
     # n is the number of factors
     mu, nu, mrc, rho, kappa = params["mu"], params["nu"], params["mean_reversion_coeff"], params["rho"], params["kappa"]
-    nu_k = max(Int(floor(4 * nu / kappa^2 + 0.5)), 1)
+    nu_k = max(floor(4 * nu / kappa^2 + 0.5), 1)
     a, b, c, d, e = sqrt(1 - rho^2), mu - nu * rho / kappa, rho * mrc / kappa - 0.5, rho / kappa, (nu - nu_k)/kappa^2
     f = e * (kappa^2 - nu - nu_k) / 2
     sigma = kappa * sqrt((1 - exp(-mrc / M)) / (4 * mrc))
     alpha = exp(-mrc / (2 * M))
-    println("Sigma: $sigma, Alpha: $alpha")
+    # println("Sigma: $sigma, Alpha: $alpha")
     logS = zeros(Float64, T + 1, N) # logS_0
     logL = zeros(Float64, T + 1, N) # logL_0
     stoppingtimes = zeros(Int, N)
@@ -177,18 +115,18 @@ function weighted_heston(S_0, V_0, n, N, M, T, params; epsilon=1e-3) # Does it w
     # '''Initialization'''
     logS[1, :] = log.(S_0 * ones(N))
     logL[1, :] .= 0
-    V[1, :] .= V_0 
+    V[1, :] .= V_0 * ones(N)
     stoppingtimes .= T +1
     Y[1, :, :] = (sqrt(V_0 / n)) * ones(N, n)
     
     for t in 2:T+1
         for k in M-1:-1:0
             Z = rand(Normal(0, 1), N, n)
-            Y[(t - 1)* M - k + 1, :, :] = alpha * Y[(t - 1) * M - k, :, :] + sigma * Z
+            @. Y[(t - 1)* M - k + 1, :, :] = alpha * Y[(t - 1) * M - k, :, :] + sigma * Z
             V[(t - 1) * M - k + 1, :] = V[(t - 1) * M - k + 1, :] + sum(Y[(t - 1)* M - k + 1, :, :].^2, dims=2)
         end
         
-        IntV = (reshape(sum(V[((t-2)*M+1):((t - 1)* M + 1), :], dims=1), N) + reshape(sum(V[((t - 2) * M + 2):( (t - 1)* M), :], dims=1), N) + 2 * (V[((t - 2)* M + 2 ), :] + V[(t - 1) * M, :])) ./ (3 * M)
+        IntV = (4 * reshape(sum(V[((t-2)*M+2):2:((t - 1)* M), :], dims=1), N) + 2 * reshape(sum(V[((t - 2) * M + 3):2:((t - 1)* M), :], dims=1), N)  +  V[(t-2)*M + 1, :] + V[(t - 1)*M + 1, :]) ./ (3 * M)
     
         sqrt_IntV = sqrt.(IntV)
         V_diff = V[(t-1)*M+1, :] .- V[(t-2)*M+1, :]
@@ -203,7 +141,7 @@ function weighted_heston(S_0, V_0, n, N, M, T, params; epsilon=1e-3) # Does it w
         for j in 1:N
             if t <= stoppingtimes[j]
                 if minimum(V[(t-2)*M+2:(t-1)*M+1, j]) > epsilon
-                    IntVinv = (sum(1 ./ V[(t-2)*M+1:(t-1)*M+1, j]) + sum(1 ./ V[(t-2)*M+2:(t - 1)*M, j]) + 2 * (1 / V[(t-2)*M+2, j] + 1 / V[(t - 1)*M, j])) / (3 * M)
+                    IntVinv = (4 * sum(1 ./ V[(t-2)*M+2:2:(t-1)*M, j]) + 2 * sum(1 ./ V[(t-2)*M+3:2:(t-1)*M, j]) + 1 ./ V[(t-2)*M+1, j] + 1 ./ V[(t-1)*M+1, j]) / (3 * M)   
                     logL[t, j] = logL[t-1, j] + e * (log(V[(t - 1)*M + 1, j] / V[(t-2)*M + 1, j]) + mrc) + f* IntVinv
                 else
                     stoppingtimes[j] = t - 1
@@ -212,61 +150,71 @@ function weighted_heston(S_0, V_0, n, N, M, T, params; epsilon=1e-3) # Does it w
         end
     end
     V_history = zeros(T + 1, N) 
-    V_history .= V[1:M:((T)*M + 1), :]
+    for i in 1:N
+        V_history[:, i] .= V[1:M:((T)*M + 1), i]
+    end
+    # V_history = [V[1:M:((T)*M + 1), i] for i in 1:N].transpose()
     return (exp.(logS), V_history, logL)
 end  
 
-
-S_0, V_0, n, N, T = 100, 0.501, 20, 10, 10
-# S_history, V_history, logL_history = weighted_heston_new_indexing(S_0, V_0, n, N, 6, T, PS_1)
-@time S_history, V_history, logL_history = weighted_heston(S_0, V_0, n, N, 2, T, PS_1)
-pretty_table(S_history)
-plot(1:T+1, S_history, xlabel = "Time", ylabel = "Stock Prices", title = "Stock Prices vs Time")
-plot(1:T+1, V_history, xlabel = "Time", ylabel = "Volatilities", title = "Volatilities vs Time")
-for i in 1:T+1
-    println("At iteration $i: LogStockPrices: $(S_history[i, :])")
-    println("At iteration $i: Volatilities: $(V_history[i, :])")
-    println("At iteration $i: LogLikelihoods: $(logL_history[i, :])")
+function integerCondition(ν, κ; epsilon=1e-6)
+    # First calculate the max difference between the bins 
+    return 4*ν/κ^2 ≈ round(4*ν/κ^2)
 end
-# for i in 1:T+1
-#     println(logS_history[i, :])
-# end
+function explicit_heston(S_0, V_0, n, num_simulations, M, T, params; epsilon=1e-3, vol_type = "Trapezoidal")
+    # check if the condition is satisfied
+    mu, nu, mrc, rho, kappa = params["mu"], params["nu"], params["mean_reversion_coeff"], params["rho"], params["kappa"]'
+    a, b, c, d, e, f= sqrt(1 - rho^2), mu - nu * rho / kappa, rho * mrc / kappa - 0.5, rho / kappa, 0, 0
+    sigma = kappa * sqrt((1 - exp(-mrc / M)) / (4 * mrc))
+    alpha = exp(-mrc / (2 * M))
+    if integerCondition(params["nu"], params["kappa"]) == false
+        error("The condition (C) is not satisfied")
+    else
+        println("The condition (C) is satisfied")
+    end
+    # T = time_limit/Δt # Number of time steps
+    logS = zeros(Float64, T + 1, num_simulations)
+    V = zeros(Float64, M*T + 1, num_simulations)
 
-# for i in 1:T+1
-#     println(V_history[i, :])
-# end
+    logS[1, :] .= log(S_0) .* ones(num_simulations)
+    # Simulate an OU process as Y
+    Y = zeros(Float64, M*T + 1, num_simulations, n)
+    Y[1, :, :] .= sqrt(V_0 / n) * ones(num_simulations, n)
+    V[1, :] .= V_0 * ones(num_simulations)
 
-# for i in 1:T+1
-#     println(logL_history[i, :])
-# end
+    for i in 2:T+1
+        for j in M-1:-1:0
+            Z = rand(Normal(0, 1), num_simulations, n)
+            @. Y[(i-1)*M-j+1, :, :] = alpha * Y[(i-1)*M-j, :, :] + sigma * Z
+            V[(i-1)*M - j + 1, :] = V[(i-1)*M - j + 1, :] + sum(Y[(i-1)*M - j + 1, :, :].^2, dims=2)
+        end
+        if vol_type == "Trapezoidal"
+            IntV = (2*reshape(sum(V[(i-2)*M+2:(i-1)*M, :], dims=1), num_simulations) .+ V[(i-1)*M+1, :] .+ V[(i-2)*M+1, :]) / (2*M)
+        elseif vol_type == "Simpsons1/3"
+            IntV = (4*reshape(sum(V[(i-2)*M+2:2:(i-1)*M, :], dims=1), num_simulations) .+ 2*reshape(sum(V[(i-2)*M+3:2:(i-1)*M, :], dims=1), num_simulations) .+ V[(i-1)*M+1, :] .+ V[(i-2)*M+1, :]) / (3*M)
+        elseif vol_type == "Simpsons3/8"
+            IntV = (3*reshape(sum(V[(i-2)*M+2:3:(i-1)*M, :], dims=1), num_simulations) .+ 3*reshape(sum(V[(i-2)*M+3:3:(i-1)*M, :], dims=1), num_simulations) .+ 2*reshape(sum(V[(i-2)*M+4:3:(i-1)*M, :], dims=1), num_simulations) .+ V[(i-1)*M+1, :] .+ V[(i-2)*M+1, :]) / (8*M/3)
+        else
+            error("Invalid vol_type")
+        end
+        sqrt_IntV = sqrt.(IntV)
+        V_diff = V[(i-1)*M+1, :] .- V[(i-2)*M+1, :]
+        Nsample = sqrt.(a .* sqrt_IntV) .* rand(Normal(0, 1), num_simulations)
+        @. logS[i, :] = logS[i-1, :] + Nsample + b + c * IntV + d * V_diff
+    end
+    V_history = zeros(T + 1, num_simulations)
+    V_history .= V[1:M:((T)*M + 1), :]
+    return exp.(logS), V_history
+end
 
-# print(S_history[:, 1]')
-p =plot(1:T+1, S_history, xlabel = "Time", ylabel = "Log Stock Prices", title = "Log Stock Prices vs Time")
-plot(1:T+1, V_history', xlabel = "Time", ylabel = "Volatilities", title = "Volatilities vs Time")
-display(p)
-# logS_history[1]
-
+# S_0, V_0, n, N, T = 100, 0.501, 20, 10, 10
+# S_history, V_history, logL_history = weighted_heston_new_indexing(S_0, V_0, n, N, 6, T, PS_1)
 
 function StochasticApproximation(basis_functions, N, T; χ = 2.0, γ = 2)
-    λ = 0.0, ζ = 0  
+    λ, ζ = 0.0, 0  
     # Implement the stochastic approximation algorithm for pricing American Call options
 end
 
-
-# Example values
-T = 10
-M = 2
-V = rand(22, 5)  # Random matrix with 22 rows and 5 columns
-
-# Create V_history with appropriate dimensions
-V_history = zeros(Float64, div((T+1)*M + 1, M), size(V, 2))
-# Perform the operation
-V_history .= V[1:M:((T)*M + 1), :]
-
-# Print the result
-# println(V_history)
-# pretty print V_history
-pretty_table(V_history)
 
 # Kahl, C., & Jäckel, P. (2006). Fast strong approximation Monte Carlo schemes for stochastic volatility models. Quantitative Finance, 6(6), 513–536. https://doi.org/10.1080/14697680600841108
 function HestonDiscretizationKahlJackel(S0, V0, T, N, params, Δt = 1e-3)
@@ -301,7 +249,7 @@ function KahlJackelVectorized(S0, V0, T, N, params, Δt = 1e-6)
     return exp.(logS), V
 end
 
-function KahlJackelVectorizedDixit(S0, V0, T, N, params, Δt = 1e-6)
+function KahlJackelVectorizedDixit(S0, V0, T, N, params; Δt = 1e-6)
     V = zeros(Float64, N, T+1)
     logS = zeros(Float64, N, T+1)
     V[:, 1] .= V0
@@ -316,27 +264,31 @@ function KahlJackelVectorizedDixit(S0, V0, T, N, params, Δt = 1e-6)
     end
     return exp.(logS), V
 end
-S0, V0, T, N = 100, 0.11, 1000, 100
+
+function BroadieKayaHestonSimulation(S0, V0, T, N, params, Δt=1e-6) # TODO: Correct this to the Actual Broadie Kaya simulation where the volatility is simulated through a Non-Central Chi-Squared distribution
+    V = zeros(Float64, N, T + 1)
+    logS = zeros(Float64, N, T + 1)
+    V[:, 1] .= V0
+    logS[:, 1] .= log(S0)
+    Δβ = sqrt(Δt) * randn(N, T)
+    ΔB = sqrt(Δt) * randn(N, T)
+    for j in 2:T+1
+        prevV = V[:, j-1]
+        prevβ = Δβ[:, j-1]
+        @. @view(V[:, j]) = prevV + (params["nu"] - params["mean_reversion_coeff"] * prevV) * Δt + params["kappa"] * sqrt(prevV) * prevβ + 0.25 * params["kappa"]^2 * (prevβ^2 - Δt)
+        @. @view(logS[:, j]) = logS[:, j-1] + params["mu"] * Δt - 0.25 * (prevV + V[:, j]) * Δt + params["rho"] * sqrt(prevV) * +0.5 * (sqrt(prevV) + sqrt(V[:, j])) * (ΔB[:, j-1] - params["rho"] * prevβ) + 0.25 * params["rho"] * (prevβ - Δt)
+    end
+    return exp.(logS), V
+end
+end
+# S0, V0, T, N = 100, 0.11, 1000, 100
   
-@time S_1, V_1 = HestonDiscretizationKahlJackel(S0, V0, T, N, params)
-@time S_2, V_2 = KahlJackelVectorized(S0, V0, T, N, params)
-@time S_3, V_3 = KahlJackelVectorizedDixit(S0, V0, T, N, params)
-plot(1:T+1, S_1', xlabel = "Time", ylabel = "Stock Prices", title = "Stock Prices vs Time")
-plot(1:T+1, V_1', xlabel = "Time", ylabel = "Volatilities", title = "Volatilities vs Time")
+
+# @time S_1, V_1 = HestonDiscretizationKahlJackel(S0, V0, T, N, params)
+# @time S_2, V_2 = KahlJackelVectorized(S0, V0, T, N, params)
+# @time S_3, V_3 = KahlJackelVectorizedDixit(S0, V0, T, N, params)
+# plot(1:T+1, S_1', xlabel = "Time", ylabel = "Stock Prices", title = "Stock Prices vs Time")
+# plot(1:T+1, V_1', xlabel = "Time", ylabel = "Volatilities", title = "Volatilities vs Time")
 
 
-function BroadieKayaHestonSimulation(S0, V0, T, N, params, Δt = 1e-6)
-    V = zeros(Float64, N, T+1)
-    logS = zeros(Float64, N, T+1)
-    V[:, 1] .= V0
-    logS[:, 1] .= log(S0)
-    Δβ = sqrt(Δt) * randn(N, T)
-    ΔB = sqrt(Δt) * randn(N, T)
-    for j in 2:T+1
-        prevV = V[:, j-1]
-        prevβ = Δβ[:, j-1]
-        @. @view(V[:, j]) = prevV + (params["nu"] - params["mean_reversion_coeff"] * prevV) * Δt + params["kappa"] * sqrt(prevV) * prevβ + 0.25 * params["kappa"]^2 * (prevβ^2 - Δt)
-        @. @view(logS[:, j]) = logS[:, j-1] + params["mu"] * Δt - 0.25 * (prevV + V[:, j]) * Δt + params["rho"] * sqrt(prevV) *  + 0.5 * (sqrt(prevV) + sqrt(V[:, j])) * (ΔB[:, j-1] - params["rho"] * prevβ) + 0.25 * params["rho"] * (prevβ - Δt)
-    end
-    return exp.(logS), V
-end
+# 2.000000004 ≈ 2.0

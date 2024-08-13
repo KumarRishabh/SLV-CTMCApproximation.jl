@@ -2,19 +2,22 @@ module OptionPricing
 
 # Write your package code here.
 
-function EuropeanCall()
+function EuropeanCall(StrikePrice, Premium)
+    return maximum(0, Premium .- StrikePrice)
 
 end
 
-function EuropeanPut()
+function EuropeanPut(StrikePrice, Premium)
+    return maximum(0, StrikePrice .- Premium)
 
 end
 
-function AmericanCall()
-
+function AmericanCall(StrikePrice, Premium, time_to_maturity)
+    return maximum(0, Premium .- StrikePrice) # This is the intrinsic value of the option
 end
 
-function AmericanPut()
+function AmericanPut(StrikePrice, Premium, time_to_maturity)
+    return maximum(0, StrikePrice .- Premium) # This is the intrinsic value of the option
 
 end
 
