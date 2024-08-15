@@ -1,24 +1,3 @@
-# @doc"""
-#     SLVCTMCApproximation.jl
-
-# # SLVCTMCApproximation.jl
-
-# This Julia module is designed to approximate the Heston Stochastic Volatility model using the Continuous Time Markov Chain (CTMC) method. The Heston model is a mathematical model that describes the evolution of the volatility of an asset. It is particularly useful in the field of financial mathematics for pricing options and other financial derivatives.
-
-# ## Features
-
-# - Approximation of the Heston Stochastic Volatility model using CTMC.
-# - Support for different binning modes for volatility process discretization.
-
-# ## Functions
-
-# - `VolatilityBins(ν, ϱ, κ, v; binning_mode = "uniform")`: Generates bins for the volatility process based on the specified parameters. Supports "uniform" and "Lo-Skindilias" binning modes.
-
-# ## Usage
-
-# To use the `VolatilityBins` function, specify the long-term variance (`ν`), mean reversion rate (`ϱ`), volatility of the variance (`κ`), and the current variance (`v`). Optionally, specify the binning mode for the volatility process discretization.
-
-# """
 
 module SLVCTMCApproximation
 using LinearAlgebra

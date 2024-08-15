@@ -9,10 +9,13 @@ using Distributions
 function branching_particle_filter(S_0, V_0, N, T, r, params, n; delta_t = 1)
     mu, nu, mrc, rho, kappa = params["mu"], params["nu"], params["mean_reversion_coeff"], params["rho"], params["kappa"]
 
-    nu_k = max(round(Int, 4 * nu / kappa^2 + 0.5), 1)
+    # nu_k = max(round(Int, 4 * nu / kappa^2 + 0.5), 1)
+    int_candidate = max(floor(4 * nu / kappa^2 + 0.5), 1)
+    nu_k = int_candidate * kappa^2 / 4
     a, b, c, d, e = sqrt(1 - rho^2), mu - nu * rho / kappa, rho * mrc / kappa - 0.5, rho / kappa, (nu - nu_k) / kappa^2
     f = e * (kappa^2 - nu - nu_k) / 2
-
+    println("a: $a, b: $b, c: $c, d: $d, e: $e, f: $f")
+    println("nu_k: $nu_k")
     V_history = [[] for _ in 1:T+1]
     logS_history = [[] for _ in 1:T+1]
     logL_history = [[] for _ in 1:T+1]
@@ -35,8 +38,8 @@ function branching_particle_filter(S_0, V_0, N, T, r, params, n; delta_t = 1)
         Y = -mrc/2 .* Y .* delta_t .+ kappa/2 .* randn(num_particles, n) .* sqrt(delta_t) .+ Y
         Vhat = sum(Y.^2, dims=2)
 
-        logShat = [logS[i] + (a * sqrt(V[i] * delta_t) * randn() + b + c* (Vhat[i] - V[i]) * delta_t + d * (Vhat[i] - V[i])) for i in 1:num_particles]
-        logLhat = [logL[i] + (e * (log(Vhat[i] / V[i]) + mrc) + f * (1 / Vhat[i] - 1 / V[i]) * delta_t) for i in 1:num_particles]
+        logShat = [logS[i] + (a * sqrt(V[i] * delta_t) * randn() + b*delta_t + c* (Vhat[i] - V[i]) * delta_t + d * (Vhat[i] - V[i])) for i in 1:num_particles]
+        logLhat = [logL[i] + (e * (log(Vhat[i] / V[i]) + mrc*delta_t) + f * (1 / Vhat[i] - 1 / V[i]) * delta_t) for i in 1:num_particles]
         logLhat = log.(exp.(logLhat) ./ sum(exp.(logLhat)))
         # convert Vhat to a vector 
         Vhat = reshape(Vhat, num_particles)
@@ -92,7 +95,7 @@ end
 
 # mean_reversion_coefficient -> ϱ
 
-function weighted_heston(S_0, V_0, n, N, M, T, params; epsilon=1e-3) # Does it work? 
+function weighted_heston(S_0, V_0, n, N, M, T, params; epsilon=1e-3, delta_t = 1) # Does it work? 
     # 
     # Theorem 1 computations
     # 
@@ -100,18 +103,24 @@ function weighted_heston(S_0, V_0, n, N, M, T, params; epsilon=1e-3) # Does it w
     # N is the number of particles
     # n is the number of factors
     mu, nu, mrc, rho, kappa = params["mu"], params["nu"], params["mean_reversion_coeff"], params["rho"], params["kappa"]
-    nu_k = max(floor(4 * nu / kappa^2 + 0.5), 1)
+    int_candidate = max(floor(4 * nu / kappa^2 + 0.5), 1)
+    nu_k = int_candidate*kappa^2 / 4
     a, b, c, d, e = sqrt(1 - rho^2), mu - nu * rho / kappa, rho * mrc / kappa - 0.5, rho / kappa, (nu - nu_k)/kappa^2
-    f = e * (kappa^2 - nu - nu_k) / 2
-    sigma = kappa * sqrt((1 - exp(-mrc / M)) / (4 * mrc))
-    alpha = exp(-mrc / (2 * M))
-    # println("Sigma: $sigma, Alpha: $alpha")
+    f = (kappa^2 - nu - nu_k) / 2
+    sigma = kappa * sqrt((1 - exp(-mrc * delta_t/ M)) / (4 * mrc))
+    alpha = exp(-mrc * delta_t / (2 * M))
+    println("Sigma: $sigma, Alpha: $alpha")
+    println("a: $a, b: $b, c: $c, d: $d, e: $e, f: $f")
     logS = zeros(Float64, T + 1, N) # logS_0
     logL = zeros(Float64, T + 1, N) # logL_0
     stoppingtimes = zeros(Int, N)
     Y = zeros(Float64, M * (T) + 1, N, n)
     V = zeros(Float64, M * (T) + 1, N)
-    
+    if integerCondition(params["nu"], params["kappa"]) == false
+        error("The condition (C) is not satisfied")
+    else
+        println("The condition (C) is satisfied")
+    end
     # '''Initialization'''
     logS[1, :] = log.(S_0 * ones(N))
     logL[1, :] .= 0
@@ -127,7 +136,7 @@ function weighted_heston(S_0, V_0, n, N, M, T, params; epsilon=1e-3) # Does it w
         end
         
         IntV = (4 * reshape(sum(V[((t-2)*M+2):2:((t - 1)* M), :], dims=1), N) + 2 * reshape(sum(V[((t - 2) * M + 3):2:((t - 1)* M), :], dims=1), N)  +  V[(t-2)*M + 1, :] + V[(t - 1)*M + 1, :]) ./ (3 * M)
-    
+        @. IntV = IntV * delta_t
         sqrt_IntV = sqrt.(IntV)
         V_diff = V[(t-1)*M+1, :] .- V[(t-2)*M+1, :]
 
@@ -135,16 +144,17 @@ function weighted_heston(S_0, V_0, n, N, M, T, params; epsilon=1e-3) # Does it w
         Nsample = a .* sqrt_IntV .* rand(Normal(0, 1), N)
 
         # Update logS
-        @. logS[t, :] = logS[t-1, :] + Nsample + b + c * IntV + d * V_diff
+        @. logS[t, :] = logS[t-1, :] + Nsample + b * delta_t + c * IntV + d * V_diff
         
         # '''Iterating over particles'''
         for j in 1:N
             if t <= stoppingtimes[j]
                 if minimum(V[(t-2)*M+2:(t-1)*M+1, j]) > epsilon
-                    IntVinv = (4 * sum(1 ./ V[(t-2)*M+2:2:(t-1)*M, j]) + 2 * sum(1 ./ V[(t-2)*M+3:2:(t-1)*M, j]) + 1 ./ V[(t-2)*M+1, j] + 1 ./ V[(t-1)*M+1, j]) / (3 * M)   
-                    logL[t, j] = logL[t-1, j] + e * (log(V[(t - 1)*M + 1, j] / V[(t-2)*M + 1, j]) + mrc) + f* IntVinv
+                    IntVinv = (4 * sum(1 ./ V[(t-2)*M+2:2:(t-1)*M, j]) + 2 * sum(1 ./ V[(t-2)*M+3:2:(t-1)*M, j]) + 1 ./ V[(t-2)*M+1, j] + 1 ./ V[(t-1)*M+1, j]) / (3 * M)
+                    IntVinv = IntVinv * delta_t
+                    logL[t, j] = logL[t-1, j] + e * (log(V[(t - 1)*M + 1, j] / V[(t-2)*M + 1, j]) + mrc * delta_t + f* IntVinv)
                 else
-                    stoppingtimes[j] = t - 1
+                    stoppingtimes[j] = t - delta_t
                 end
             end
         end
@@ -161,12 +171,78 @@ function integerCondition(ν, κ; epsilon=1e-6)
     # First calculate the max difference between the bins 
     return 4*ν/κ^2 ≈ round(4*ν/κ^2)
 end
+
+function weighted_heston_M2(S_0, V_0, n, num_simulations, T, params; epsilon=1e-3, vol_type= "Trapezoidal", delta_t = 1)
+    mu, nu, mrc, rho, kappa = params["mu"], params["nu"], params["mean_reversion_coeff"], params["rho"], params["kappa"]
+    int_candidate = max(floor(4 * nu / kappa^2 + 0.5), 1)
+    nu_k = int_candidate*kappa^2 / 4
+    a, b, c, d, e = sqrt(1 - rho^2), mu - nu * rho / kappa, rho * mrc / kappa - 0.5, rho / kappa, (nu - nu_k) / kappa^2
+    f = e* (kappa^2 - nu - nu_k) / 2
+    sigma = kappa * sqrt((1 - exp(-mrc * delta_t / 2)) / (4 * mrc))
+    alpha = exp(-mrc * delta_t / 4)
+
+    println("Sigma: $sigma, Alpha: $alpha")
+    println("a: $a, b: $b, c: $c, d: $d, e: $e, f: $f")
+
+    if integerCondition(params["nu"], params["kappa"]) == false
+        error("The condition (C) is not satisfied")
+    else
+        println("The condition (C) is satisfied")
+    end
+
+    logS = zeros(Float64, T + 1, num_simulations)
+    logL = zeros(Float64, T + 1, num_simulations)
+    stoppingtimes = zeros(Int, num_simulations)
+    V = zeros(Float64, 2*T + 1, num_simulations)
+    Y = zeros(Float64, 2*T + 1, num_simulations, n)
+
+    logS[1, :] .= log(S_0) .* ones(num_simulations)
+    logL[1, :] .= zeros(num_simulations)
+    V[1, :] .= V_0 .* ones(num_simulations)
+    stoppingtimes .= T + 1
+    Y[1, :, :] .= sqrt(V_0 / n) .* ones(num_simulations, n)
+
+    for t in 2:T+1
+        for j in 1:num_simulations
+            # Draw 4 normal random variables
+            for i in 1:Int(n/2)
+                z_1, z_2, z_3, z_4 = randn(), randn(), randn(), randn()
+                Y[2*(t-1), j, 2*i-1] = alpha * Y[2*(t - 1), j, 2*i-1] + sigma * z_1
+                Y[2*(t-1), j, 2*i] = alpha * Y[2*(t - 1), j, 2*i] + sigma * z_2
+                Y[2*(t-1) + 1, j, 2*i-1] = alpha * Y[2*(t - 1) + 1, j, 2*i-1] + sigma * z_3
+                Y[2*(t-1) + 1, j, 2*i] = alpha * Y[2*(t - 1) + 1, j, 2*i] + sigma * z_4
+                V[2*(t-1), j] += Y[2*(t-1), j, 2*i-1]^2 + Y[2*(t-1), j, 2*i]^2
+                V[2*(t-1) + 1, j] += Y[2*(t-1) + 1, j, 2*i-1]^2 + Y[2*(t-1) + 1, j, 2*i]^2
+            end
+            IntV = V[2*(t-2) + 1, j] + 4 * V[2*(t-1), j] + V[2*(t-1) + 1, j]
+            IntV /= 6 
+            IntV = IntV * delta_t
+            N = a * sqrt(IntV) * randn()
+            logS[t, j] = logS[t-1, j] + N + b * delta_t + c * IntV + d * (V[2*(t-1) + 1, j] - V[2*(t-2) + 1, j])
+            if t <= stoppingtimes[j]
+                if minimum([V[2*(t - 1), j], V[2*(t - 1) + 1, j]]) > epsilon
+                    IntVinv = 1/V[2*(t-2) + 1, j] + 4 * 1 / V[2*(t-1), j] + 1 / V[2*(t-1) + 1, j]
+                    IntVinv /= 6
+                    IntVinv = IntVinv * delta_t
+                    logL[t, j] = logL[t-1, j] + e * (log(V[2*(t-1) + 1, j] / V[2*(t-2) + 1, j]) + mrc * delta_t) + f * (IntVinv)
+                else
+                    stoppingtimes[j] = t - 1
+                end
+            end
+        end 
+    end 
+    V_history = zeros(T + 1, num_simulations)
+    V_history .= V[1:2:((T)*2 + 1), :]
+    return exp.(logS), V_history, logL
+end 
+
 function explicit_heston(S_0, V_0, n, num_simulations, M, T, params; epsilon=1e-3, vol_type = "Trapezoidal")
     # check if the condition is satisfied
     mu, nu, mrc, rho, kappa = params["mu"], params["nu"], params["mean_reversion_coeff"], params["rho"], params["kappa"]'
     a, b, c, d, e, f= sqrt(1 - rho^2), mu - nu * rho / kappa, rho * mrc / kappa - 0.5, rho / kappa, 0, 0
     sigma = kappa * sqrt((1 - exp(-mrc / M)) / (4 * mrc))
     alpha = exp(-mrc / (2 * M))
+    println("Sigma: $sigma, Alpha: $alpha")
     if integerCondition(params["nu"], params["kappa"]) == false
         error("The condition (C) is not satisfied")
     else

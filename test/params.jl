@@ -5,7 +5,7 @@ using Revise
 include("../src/DiscreteTimeApproximation.jl") 
 using .DiscreteTimeApproximation
 # python_functions = pyimport("../src/branching_particle_pricer.py")
-T, delta_t, n = 200, 1, 20
+T, delta_t, n = 20000, 1, 20
 S_0, V_0, N, r = 100, 0.04, 200, 10
 
 model_params = Dict(
@@ -22,7 +22,7 @@ PS_1 = Dict(
     # "S_0" => 100,
     # "V_0" => 0.501,
     "mu" => 0.02,
-    "nu" => 0.085,
+    "nu" => 0.085, # 8.5 * 0.2 * 0.2 / 4
     "mean_reversion_coeff" => 6.21, # ϱ
     "rho" => -0.7,
     "kappa" => 0.2
@@ -55,7 +55,10 @@ explicit_params = Dict(
     "rho" => -0.7,
     "kappa" => 0.61
 )
-@time S, V = DiscreteTimeApproximation.explicit_heston(S_0, V_0, n, N, 1, T, explicit_params, vol_type = "Simpsons1/3")
+@time S, V, LogL = DiscreteTimeApproximation.branching_particle_filter(S_0, V_0, n, N, r, PS_3, T; delta_t = 0.001)
+S
+@time S, V, LogL = DiscreteTimeApproximation.weighted_heston(S_0, 0.010201, n, N, 6, T, explicit_params, delta_t = 0.002)
+@time S, V, LogL = DiscreteTimeApproximation.weighted_heston_M2(S_0, 0.010201, n, N, T, explicit_params, delta_t = 0.002)
 @time S, V, logL = DiscreteTimeApproximation.weighted_heston(S_0, 0.07, 3, 20, 10, 50, PS_3)
 plot(V, title = "Stock Prices", label = "Stock Prices", xlabel = "Time", ylabel = "Stock Price", legend=false)
 @time logS_history, V_history, logL_history = DiscreteTimeApproximation.branching_particle_filter(S_0, V_0, 20, 50, r, PS_3, n; delta_t)
@@ -115,3 +118,7 @@ Vhat = sum(Y .^ 2, dims=2)
 S_explicit, V_explicit = DiscreteTimeApproximation.explicit_heston(S_0, 0.010201, n, N, 6, T, explicit_params, vol_type = "Simpsons1/3")
 S, V, L = DiscreteTimeApproximation.weighted_heston(S_0, 0.010201, n, N, 6, T, explicit_params)
 S, V = DiscreteTimeApproximation.KahlJackelVectorizedDixit(S_0, 0.010201, T, N, explicit_params, Δt = 0.00001)
+
+@time S, V, LogL = DiscreteTimeApproximation.weighted_heston_M2(S_0, 0.010201, n, N, T, explicit_params)
+nu, kappa = explicit_params["nu"], explicit_params["kappa"]
+max(floor(4 * nu / kappa^2 + 0.5), 1)

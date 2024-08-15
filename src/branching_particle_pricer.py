@@ -13,7 +13,10 @@ def branching_particle_filter(S_0, V_0, N, T, r):
     num_particles_ => N_{t}
     '''
     ''' Parameters '''
-    nu_k = max(int(4*nu/kappa**2 + 0.5), 1)
+    # nu_k = max(int(4*nu/kappa**2 + 0.5), 1)
+    # int_candidate = max(floor(4*nu/kappa**2 + 0.5), 1)
+    int_candidate = max(int(4*nu/kappa**2 + 0.5), 1)
+    nu_k = int_candidate * kappa**2/4.0
     a, b, c, d, e = np.sqrt(1 - rho**2), mu - nu*rho/kappa, rho*mrc/kappa - 0.5, rho/kappa, (nu - nu_k)/kappa**2 
     f = e*(kappa**2 - nu - nu_k)/2
     '''Declaration of Variables'''
