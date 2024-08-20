@@ -1,9 +1,10 @@
+using Parameters
+using Plots
 
 module SLVCTMCApproximation
 using LinearAlgebra
 using Random
 using Distributions
-using Plots
 using Parameters 
 using BenchmarkTools
 using StatsBase
@@ -87,7 +88,7 @@ using Revise
         # TODO: Use VolatilityBins function to generate the bins for the volatility process
         # These bings can be uniform or non-uniform according to various processes 
         # Initialize the generator matrix Q
-        volbins = VolatilityBins(v0, ν, ϱ, κ, T, γ = γ, num_bins = num_bins)
+        volbins = VolatilityBins(ν, ϱ, κ, v0, T, γ = γ, num_bins = num_bins)
 
         
         Q = zeros(n, n)
@@ -175,7 +176,7 @@ function simulateQtransitions(Q, bins, T; v0 = 0.04)
     transition_times = [current_time]
     while current_time < T
 
-        next_time = current_time + rand(Exponential(-1/Q[current_state, current_state]))
+        next_time = current_time + rand(Exponential(-1/Q[current_state, current_state])) # Calculate the next transition time
         # Calculate the transition probabilities
         e_i = (i, num_states) -> (e = zeros(Float64, num_states); e[i] = 1.0; e)
 
@@ -232,6 +233,46 @@ function multiple_price_volatility_simulations(T, μ, ν, ρ, κ, ϱ, S0, v0; nu
     return price_processes, volatility_processes, transition_times_processes
 end
 end
+
+@with_kw struct HestonParameters
+    S0::Float64 = 100.0
+    V0::Float64 = 0.04
+    mu::Float64 = -0.5
+    nu::Float64 = 0.01
+    mean_reversion_coeff::Float64 = 5.3
+    rho::Float64 = -0.7
+    kappa::Float64 = -0.5
+end
+
+@with_kw struct SimulationParameters
+    epsilon::Float64 = 10e-06
+    nsim::Int64 = 10000
+end 
+
+@with_kw struct PayoffParameters
+    strike::Float64 = 100.0
+    maturity::Float64 = 1.0
+end
+
+hestonparams = HestonParameters()
+bins = SLVCTMCApproximation.VolatilityBins(hestonparams.nu, hestonparams.mean_reversion_coeff, hestonparams.kappa, hestonparams.V0, 10, γ = 100, num_bins = 100)
+Q = SLVCTMCApproximation.calculatevolatilityGenerator(hestonparams.nu, hestonparams.mean_reversion_coeff, hestonparams.kappa, hestonparams.V0, 10, γ = 100, num_bins = 100)
+volatilitytransitions, transition_times = SLVCTMCApproximation.simulateQtransitions(Q, bins, 10, v0 = hestonparams.V0)
+volatitiltyprocess = bins[volatilitytransitions]
+plot(transition_times, volatitiltyprocess, title = "Volatility Process vs Time", label = "Volatility Process", xlabel = "Time", ylabel = "Volatility", legend = false)
+price_process = SLVCTMCApproximation.simulatePriceProcess(transition_times, volatitiltyprocess, hestonparams.mu, hestonparams.nu, hestonparams.rho, hestonparams.kappa, hestonparams.mean_reversion_coeff, hestonparams.S0, hestonparams.V0)
+plot(transition_times, exp.(price_process), title = "Price Process vs Time", label = "Price Process", xlabel = "Time", ylabel = "Price", legend = false)
+
+price_simulations, volatitiltyprocesses, transition_times = SLVCTMCApproximation.multiple_price_volatility_simulations(10, hestonparams.mu, hestonparams.nu, hestonparams.rho, hestonparams.kappa, hestonparams.mean_reversion_coeff, hestonparams.S0, hestonparams.V0; num_simulations = 100)
+p = plot()
+for i in 1:100
+    if i == 1
+        p = plot(transition_times[i], price_simulations[i], label = "Price Process", xlabel = "Time", ylabel = "Price", title = "Price Process vs Time", legend = false)
+    else 
+        plot!(transition_times[i], price_simulations[i], label = "Price Process", legend = false)
+    end
+end
+display(p)
 # PS1 = Dict(
 #     :S0 => 100,
 #     :μ => 0.02,
@@ -316,28 +357,3 @@ end
 # # length(state_transitions)
 # # length(transition_times)
 # volatilitychain
-
-# # Plot the price process and the volatility process
-# plot(transition_times, priceprocess, label = "Price Process", xlabel = "Time", ylabel = "Price", title = "Price Process vs Time")
-# plot(transition_times, volatilitychain, label = "Volatility Process", xlabel = "Time", ylabel = "Volatility", title = "Volatility Process vs Time")
-# function condition(bins, v0, ν, ϱ, κ)
-#     # First calculate the max difference between the bins 
-#     max_diff = maximum(diff(bins))
-#     # Find the min ratio of volatilityto the modulus of the drift
-#     min_ratio = minimum(κ^2 .* bins ./ abs.(ν .- ϱ .* bins))
-
-#     return max_diff <= min_ratio
-# end
-
-# function integerCondition(ν, κ)
-#     # First calculate the max difference between the bins 
-#     return 4*ν/κ^2
-# end
-
-# integerCondition(ν, κ)
-# # This condition is satisfied. 
-
-# # calculateSufficientStats(ν, ϱ, κ, v0, T)[1]                                                               
-# S_0, μ, ν, ρ, κ, ϱ, v_0 = PS3[:S0], PS3[:μ], PS3[:ν], PS3[:ρ], PS3[:κ], PS3[:ϱ], PS3[:V0]
-# ϱ*ρ/κ - 0.5
-# μ - ρ*ν/κ

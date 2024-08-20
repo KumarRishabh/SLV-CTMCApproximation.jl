@@ -5,8 +5,8 @@ using Revise
 include("../src/DiscreteTimeApproximation.jl") 
 using .DiscreteTimeApproximation
 # python_functions = pyimport("../src/branching_particle_pricer.py")
-T, delta_t, n = 20000, 1, 20
-S_0, V_0, N, r = 100, 0.04, 200, 10
+T, delta_t, n = 200, 1, 20
+S_0, V_0, N, r = 100, 0.04, 200, 1.5
 
 model_params = Dict(
     # "S_0" => 100,
@@ -47,6 +47,7 @@ PS_3 = Dict(
     "rho" => -0.96,
     "kappa" => 0.6
 )
+# 4 * PS_3["nu"] / PS_3["kappa"]^2 
 
 explicit_params = Dict(
     "mu" => 0.0319,
@@ -58,8 +59,9 @@ explicit_params = Dict(
 @time S, V, LogL = DiscreteTimeApproximation.branching_particle_filter(S_0, V_0, n, N, r, PS_3, T; delta_t = 0.001)
 S
 @time S, V, LogL = DiscreteTimeApproximation.weighted_heston(S_0, 0.010201, n, N, 6, T, explicit_params, delta_t = 0.002)
+# @time S, V = DiscreteTimeApproximation.explicit_heston(S_0, 0.010201, n, N, 6, T, explicit_params, vol_type = "Trapezoidal", delta_t = 0.002)
 @time S, V, LogL = DiscreteTimeApproximation.weighted_heston_M2(S_0, 0.010201, n, N, T, explicit_params, delta_t = 0.002)
-@time S, V, logL = DiscreteTimeApproximation.weighted_heston(S_0, 0.07, 3, 20, 10, 50, PS_3)
+@time S, V, logL, stoppingtimes = DiscreteTimeApproximation.weighted_heston(S_0, 0.11, 3, 20, 6, 50000, PS_2, delta_t = 0.001)
 plot(V, title = "Stock Prices", label = "Stock Prices", xlabel = "Time", ylabel = "Stock Price", legend=false)
 @time logS_history, V_history, logL_history = DiscreteTimeApproximation.branching_particle_filter(S_0, V_0, 20, 50, r, PS_3, n; delta_t)
 for i in 1:50
@@ -109,16 +111,8 @@ plot(V, title = "Volatility Processes", label = "Volatility Processes", xlabel =
 
 # example ternary statement
 
-# test this caluclation here
-Y = sqrt(V_0/n) .* ones(N, n)
-kappa, mrc = PS_3["kappa"], PS_3["mean_reversion_coeff"]
-Y = exp(-mrc / 2) .* ((kappa / 2) .* rand(Normal(0, 1), N, n) .* sqrt(delta_t) .+ Y)
-Vhat = sum(Y .^ 2, dims=2)
-
-S_explicit, V_explicit = DiscreteTimeApproximation.explicit_heston(S_0, 0.010201, n, N, 6, T, explicit_params, vol_type = "Simpsons1/3")
-S, V, L = DiscreteTimeApproximation.weighted_heston(S_0, 0.010201, n, N, 6, T, explicit_params)
-S, V = DiscreteTimeApproximation.KahlJackelVectorizedDixit(S_0, 0.010201, T, N, explicit_params, Δt = 0.00001)
-
-@time S, V, LogL = DiscreteTimeApproximation.weighted_heston_M2(S_0, 0.010201, n, N, T, explicit_params)
-nu, kappa = explicit_params["nu"], explicit_params["kappa"]
-max(floor(4 * nu / kappa^2 + 0.5), 1)
+# test the caluclation of alph and sigma Here
+kappa, mrc, M = PS_2["kappa"], PS_2["mean_reversion_coeff"], 6
+delta_t = 0.02
+sigma = kappa * sqrt((1 - exp(-mrc * delta_t / M)) / (4 * mrc))
+alpha = exp(-mrc * delta_t/ (2 * M))

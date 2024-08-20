@@ -4,8 +4,6 @@ module DiscreteTimeApproximation
 using Random, Statistics, LinearAlgebra, Plots, PyCall, PrettyTables
 using Distributions
 
-
-
 function branching_particle_filter(S_0, V_0, N, T, r, params, n; delta_t = 1)
     mu, nu, mrc, rho, kappa = params["mu"], params["nu"], params["mean_reversion_coeff"], params["rho"], params["kappa"]
 
@@ -96,7 +94,8 @@ end
 # mean_reversion_coefficient -> ϱ
 
 function weighted_heston(S_0, V_0, n, N, M, T, params; epsilon=1e-3, delta_t = 1) # Does it work? 
-    # 
+    # set random seed
+    Random.seed!(1234)
     # Theorem 1 computations
     # 
     # Here M is the grid size for the time discretization
@@ -113,11 +112,14 @@ function weighted_heston(S_0, V_0, n, N, M, T, params; epsilon=1e-3, delta_t = 1
     println("a: $a, b: $b, c: $c, d: $d, e: $e, f: $f")
     logS = zeros(Float64, T + 1, N) # logS_0
     logL = zeros(Float64, T + 1, N) # logL_0
-    stoppingtimes = zeros(Int, N)
-    Y = zeros(Float64, M * (T) + 1, N, n)
+    stoppingtimes = zeros(Float64, N)
+    # Y = zeros(Float64, M * (T) + 1, N, n)
+    # # Y_prev = zeros(Float64, N, n)
+    # # Y_next = zeros(Float64, N, n)
+    Y = zeros(Float64, N, n)
     V = zeros(Float64, M * (T) + 1, N)
     if integerCondition(params["nu"], params["kappa"]) == false
-        error("The condition (C) is not satisfied")
+        println("The condition (C) is not satisfied")
     else
         println("The condition (C) is satisfied")
     end
@@ -126,13 +128,17 @@ function weighted_heston(S_0, V_0, n, N, M, T, params; epsilon=1e-3, delta_t = 1
     logL[1, :] .= 0
     V[1, :] .= V_0 * ones(N)
     stoppingtimes .= T +1
-    Y[1, :, :] = (sqrt(V_0 / n)) * ones(N, n)
+    # Y[1, :, :] .= sqrt(V_0 / n) .* ones(N, n)
+    Y .= (sqrt(V_0 / n)) .* ones(N, n)
     
+
     for t in 2:T+1
         for k in M-1:-1:0
             Z = rand(Normal(0, 1), N, n)
-            @. Y[(t - 1)* M - k + 1, :, :] = alpha * Y[(t - 1) * M - k, :, :] + sigma * Z
-            V[(t - 1) * M - k + 1, :] = V[(t - 1) * M - k + 1, :] + sum(Y[(t - 1)* M - k + 1, :, :].^2, dims=2)
+            @. Y = alpha * Y + sigma * Z
+            # @. Y[(t - 1)* M - k + 1, :, :] = alpha * Y[(t - 1) * M - k, :, :] + sigma * Z
+            # V[(t - 1) * M - k + 1, :] = V[(t - 1) * M - k + 1, :] + sum(Y[(t - 1)* M - k + 1, :, :].^2, dims=2)
+            V[(t - 1) * M - k + 1, :] = V[(t - 1) * M - k + 1, :] + sum(Y.^2, dims=2)
         end
         
         IntV = (4 * reshape(sum(V[((t-2)*M+2):2:((t - 1)* M), :], dims=1), N) + 2 * reshape(sum(V[((t - 2) * M + 3):2:((t - 1)* M), :], dims=1), N)  +  V[(t-2)*M + 1, :] + V[(t - 1)*M + 1, :]) ./ (3 * M)
@@ -164,7 +170,7 @@ function weighted_heston(S_0, V_0, n, N, M, T, params; epsilon=1e-3, delta_t = 1
         V_history[:, i] .= V[1:M:((T)*M + 1), i]
     end
     # V_history = [V[1:M:((T)*M + 1), i] for i in 1:N].transpose()
-    return (exp.(logS), V_history, logL)
+    return (exp.(logS), V_history, logL, stoppingtimes)
 end  
 
 function integerCondition(ν, κ; epsilon=1e-6)
@@ -173,6 +179,7 @@ function integerCondition(ν, κ; epsilon=1e-6)
 end
 
 function weighted_heston_M2(S_0, V_0, n, num_simulations, T, params; epsilon=1e-3, vol_type= "Trapezoidal", delta_t = 1)
+    Random.seed!(1234)
     mu, nu, mrc, rho, kappa = params["mu"], params["nu"], params["mean_reversion_coeff"], params["rho"], params["kappa"]
     int_candidate = max(floor(4 * nu / kappa^2 + 0.5), 1)
     nu_k = int_candidate*kappa^2 / 4
@@ -194,25 +201,30 @@ function weighted_heston_M2(S_0, V_0, n, num_simulations, T, params; epsilon=1e-
     logL = zeros(Float64, T + 1, num_simulations)
     stoppingtimes = zeros(Int, num_simulations)
     V = zeros(Float64, 2*T + 1, num_simulations)
-    Y = zeros(Float64, 2*T + 1, num_simulations, n)
-
+    # Y = zeros(Float64, 2*T + 1, num_simulations, n)
+    Y = zeros(Float64, num_simulations, n)
     logS[1, :] .= log(S_0) .* ones(num_simulations)
     logL[1, :] .= zeros(num_simulations)
     V[1, :] .= V_0 .* ones(num_simulations)
     stoppingtimes .= T + 1
-    Y[1, :, :] .= sqrt(V_0 / n) .* ones(num_simulations, n)
+    # Y[1, :, :] .= sqrt(V_0 / n) .* ones(num_simulations, n)
+    Y .= sqrt(V_0 / n) .* ones(num_simulations, n)
 
     for t in 2:T+1
         for j in 1:num_simulations
             # Draw 4 normal random variables
             for i in 1:Int(n/2)
-                z_1, z_2, z_3, z_4 = randn(), randn(), randn(), randn()
-                Y[2*(t-1), j, 2*i-1] = alpha * Y[2*(t - 1), j, 2*i-1] + sigma * z_1
-                Y[2*(t-1), j, 2*i] = alpha * Y[2*(t - 1), j, 2*i] + sigma * z_2
-                Y[2*(t-1) + 1, j, 2*i-1] = alpha * Y[2*(t - 1) + 1, j, 2*i-1] + sigma * z_3
-                Y[2*(t-1) + 1, j, 2*i] = alpha * Y[2*(t - 1) + 1, j, 2*i] + sigma * z_4
-                V[2*(t-1), j] += Y[2*(t-1), j, 2*i-1]^2 + Y[2*(t-1), j, 2*i]^2
-                V[2*(t-1) + 1, j] += Y[2*(t-1) + 1, j, 2*i-1]^2 + Y[2*(t-1) + 1, j, 2*i]^2
+                for k in 0:1
+                    z_1, z_2 = randn(), randn()
+                # Y[2*(t-1), j, 2*i-1] = alpha * Y[2*(t - 1), j, 2*i-1] + sigma * z_1
+                # Y[2*(t-1), j, 2*i] = alpha * Y[2*(t - 1), j, 2*i] + sigma * z_2
+                # Y[2*(t-1) + 1, j, 2*i-1] = alpha * Y[2*(t - 1) + 1, j, 2*i-1] + sigma * z_3
+                # Y[2*(t-1) + 1, j, 2*i] = alpha * Y[2*(t - 1) + 1, j, 2*i] + sigma * z_4
+                    Y[j, 2*i-1] = alpha * Y[j, 2*i-1] + sigma * z_1
+                    Y[j, 2*i] = alpha * Y[j, 2*i] + sigma * z_2
+                    V[2*(t-1) + k, j] += Y[j, 2*i-1]^2 + Y[j, 2*i]^2
+                    # V[2*(t-1) + 1, j] += Y[2*(t-1) + 1, j, 2*i-1]^2 + Y[2*(t-1) + 1, j, 2*i]^2
+                end
             end
             IntV = V[2*(t-2) + 1, j] + 4 * V[2*(t-1), j] + V[2*(t-1) + 1, j]
             IntV /= 6 
@@ -236,12 +248,12 @@ function weighted_heston_M2(S_0, V_0, n, num_simulations, T, params; epsilon=1e-
     return exp.(logS), V_history, logL
 end 
 
-function explicit_heston(S_0, V_0, n, num_simulations, M, T, params; epsilon=1e-3, vol_type = "Trapezoidal")
+function explicit_heston(S_0, V_0, n, num_simulations, M, T, params; epsilon=1e-3, vol_type = "Trapezoidal", delta_t = 1)
     # check if the condition is satisfied
     mu, nu, mrc, rho, kappa = params["mu"], params["nu"], params["mean_reversion_coeff"], params["rho"], params["kappa"]'
     a, b, c, d, e, f= sqrt(1 - rho^2), mu - nu * rho / kappa, rho * mrc / kappa - 0.5, rho / kappa, 0, 0
-    sigma = kappa * sqrt((1 - exp(-mrc / M)) / (4 * mrc))
-    alpha = exp(-mrc / (2 * M))
+    sigma = kappa * sqrt((1 - exp(-mrc * delta_t / M)) / (4 * mrc))
+    alpha = exp(-mrc * delta_t/ (2 * M))
     println("Sigma: $sigma, Alpha: $alpha")
     if integerCondition(params["nu"], params["kappa"]) == false
         error("The condition (C) is not satisfied")
@@ -254,29 +266,35 @@ function explicit_heston(S_0, V_0, n, num_simulations, M, T, params; epsilon=1e-
 
     logS[1, :] .= log(S_0) .* ones(num_simulations)
     # Simulate an OU process as Y
-    Y = zeros(Float64, M*T + 1, num_simulations, n)
-    Y[1, :, :] .= sqrt(V_0 / n) * ones(num_simulations, n)
+    # Y = zeros(Float64, M*T + 1, num_simulations, n)
+    Y = zeros(Float64, num_simulations, n)
+    # Y[1, :, :] .= sqrt(V_0 / n) * ones(num_simulations, n)
+    Y .= sqrt(V_0 / n) .* ones(num_simulations, n)
     V[1, :] .= V_0 * ones(num_simulations)
 
     for i in 2:T+1
         for j in M-1:-1:0
             Z = rand(Normal(0, 1), num_simulations, n)
-            @. Y[(i-1)*M-j+1, :, :] = alpha * Y[(i-1)*M-j, :, :] + sigma * Z
-            V[(i-1)*M - j + 1, :] = V[(i-1)*M - j + 1, :] + sum(Y[(i-1)*M - j + 1, :, :].^2, dims=2)
+            # @. Y[(i-1)*M-j+1, :, :] = alpha * Y[(i-1)*M-j, :, :] + sigma * Z
+            @. Y = alpha * Y + sigma * Z
+            V[(i-1)*M - j + 1, :] = V[(i-1)*M - j + 1, :] + sum(Y.^2, dims=2)
         end
         if vol_type == "Trapezoidal"
             IntV = (2*reshape(sum(V[(i-2)*M+2:(i-1)*M, :], dims=1), num_simulations) .+ V[(i-1)*M+1, :] .+ V[(i-2)*M+1, :]) / (2*M)
+            IntV = IntV * delta_t
         elseif vol_type == "Simpsons1/3"
             IntV = (4*reshape(sum(V[(i-2)*M+2:2:(i-1)*M, :], dims=1), num_simulations) .+ 2*reshape(sum(V[(i-2)*M+3:2:(i-1)*M, :], dims=1), num_simulations) .+ V[(i-1)*M+1, :] .+ V[(i-2)*M+1, :]) / (3*M)
+            IntV = IntV * delta_t
         elseif vol_type == "Simpsons3/8"
             IntV = (3*reshape(sum(V[(i-2)*M+2:3:(i-1)*M, :], dims=1), num_simulations) .+ 3*reshape(sum(V[(i-2)*M+3:3:(i-1)*M, :], dims=1), num_simulations) .+ 2*reshape(sum(V[(i-2)*M+4:3:(i-1)*M, :], dims=1), num_simulations) .+ V[(i-1)*M+1, :] .+ V[(i-2)*M+1, :]) / (8*M/3)
+            IntV = IntV * delta_t
         else
             error("Invalid vol_type")
         end
         sqrt_IntV = sqrt.(IntV)
         V_diff = V[(i-1)*M+1, :] .- V[(i-2)*M+1, :]
         Nsample = sqrt.(a .* sqrt_IntV) .* rand(Normal(0, 1), num_simulations)
-        @. logS[i, :] = logS[i-1, :] + Nsample + b + c * IntV + d * V_diff
+        @. logS[i, :] = logS[i-1, :] + Nsample + b * delta_t + c * IntV + d * V_diff
     end
     V_history = zeros(T + 1, num_simulations)
     V_history .= V[1:M:((T)*M + 1), :]
