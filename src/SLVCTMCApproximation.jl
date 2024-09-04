@@ -19,14 +19,7 @@ using Revise
 # The CTMC method is used to approximate the Heston model
 
 
-    function calculateSufficientStats(ν, ϱ, κ, v0, T)
-
-        mean = v0*exp(-ϱ*T) + ν*(1 - exp(-ϱ*T))/ϱ
-        variance = κ^2*v0*(exp(-ϱ*T) - exp(-2*ϱ*T))/ϱ + ν*κ^2*(1 - exp(-ϱ*T))^2/(2*ϱ^2)
-        std_dev = sqrt(variance)
-        return mean, std_dev
-    end
-
+    
     function VolatilityBins(ν, ϱ, κ, v0, T; binning_mode = "uniform", epsilon = 0.0001, γ = 2, num_bins = 100)
         # Output: the bins for the volatility process
         # Set the number of bins
