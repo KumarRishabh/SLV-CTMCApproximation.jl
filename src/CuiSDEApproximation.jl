@@ -78,7 +78,7 @@ function calculateHestonVolatilityGenerator(paramsHeston, paramsSim, paramsPayof
     # This process (rather the index of the process) is denoted by α(t) in the following paper:
     # 1. Cui, Z., Lars Kirkby, J., & Nguyen, D. (2019). Continuous-time Markov chain and regime switching approximations with applications to options pricing. Springer.
 
-    Q = zeros(grids, grids) 
+    Q = zeros(grids, grids)
     # Calculate the drift and diffusion coefficients
     mean, std_dev = calculateSufficientStats(paramsHeston.nu, paramsHeston.mean_reversion_coeff, paramsHeston.kappa, paramsHeston.V0, paramsPayoff.maturity)    
     # calculate the boundary points for the approximation 
@@ -126,9 +126,10 @@ function simulateQtransitions()
 
 end 
 
-function EuropeanCallOptionPrice()
+function EuropeanCallOptionPricing(Q, paramPayoff)
 
 end
 
 end 
+
 

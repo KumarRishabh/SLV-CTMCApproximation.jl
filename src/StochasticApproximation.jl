@@ -190,7 +190,7 @@ end
 # Employ a symbolic approach to calculate the Laguerre_Polynomials
 
 param_Heston = HestonParameters(S0 = 100.0, V0 = 0.11, mu = 0.02, nu = 2.65*0.8*0.8/4, mean_reversion_coeff = 6, rho = -0.75, kappa = 0.8)
-param_simulation = SimulationParameters(nsim = 1000000, number_of_polynomials = 5, gamma_SA = 1, exponent_SA = 1 / 10)
+param_simulation = SimulationParameters(nsim = 100000, number_of_polynomials = 5, gamma_SA = 1, exponent_SA = 1 / 10)
 param_payoff = PayoffParameters()
 # Consider the asset price follows a Geometric Brownian Motion
 # Employ a Monte Carlo Simulation to calculate the price of a European Call Option
@@ -206,9 +206,9 @@ PS_3 = Dict(
     "kappa" => param_Heston.kappa
 )
  
-S_matrix, V_matrix, L_matrix, _ = DiscreteTimeApproximation.weighted_heston(param_Heston.S0, param_Heston.V0, param_simulation.n_normals, param_simulation.nsim, param_simulation.M, param_simulation.nstep, PS_3, delta_t = param_simulation.step_size)
+@time S_matrix, V_matrix, L_matrix, _ = DiscreteTimeApproximation.weighted_heston(param_Heston.S0, param_Heston.V0, param_simulation.n_normals, param_simulation.nsim, param_simulation.M, param_simulation.nstep, PS_3, delta_t = param_simulation.step_size)
 L_matrix .= exp.(L_matrix)
-@profile SAApproximation(param_Heston, param_simulation, param_payoff, S_matrix, V_matrix, L_matrix)
+@time SAApproximation(param_Heston, param_simulation, param_payoff, S_matrix, V_matrix, L_matrix)
 ProfileView.print()
 Laguerre_Polynomials_3D(3, 1.5, 2.0, 3.0) 
 size(S_matrix[1, :])
