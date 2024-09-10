@@ -54,23 +54,58 @@ end
 # dV = κ * (θ - V) * dt + γ * V^(3/2) * dW2
 
 function calculateSufficientStats(ν, ϱ, κ, v0, T)
-
     mean = v0 * exp(-ϱ * T) + ν * (1 - exp(-ϱ * T)) / ϱ
     variance = κ^2 * v0 * (exp(-ϱ * T) - exp(-2 * ϱ * T)) / ϱ + ν * κ^2 * (1 - exp(-ϱ * T))^2 / (2 * ϱ^2)
     std_dev = sqrt(variance)
     return mean, std_dev
 end
 
+function calculateVolatilityBins(lower_bound, upper_bound, grids, V0; type = "Uniform")
+    if type == "Uniform"
+        return range(lower_bound, stop = upper_bound, length = grids)
+    elseif type == "Lo-Skindilias"
+        α = (upper_bound - lower_bound)/2
+        c1 = # arcsinh 
+        # Implement the Lo-Skindilias method
+        # How to return not implemented error
+    else
+        error("Type not supported")
+    end
+end
 
-function calculateHestonVolatilityGenerator(paramsHeston, paramsSim, paramsPayoff; grids = 100, γ::Int32 = 5)
+function calculateHestonVolatilityGenerator(paramsHeston, paramsSim, paramsPayoff; grids = 100, γ::Int32 = 5, epsilon = 0.0001)
     # Calculate the CTMC generator approximating the volatility process in the Heston model.
     # This process (rather the index of the process) is denoted by α(t) in the following paper:
     # 1. Cui, Z., Lars Kirkby, J., & Nguyen, D. (2019). Continuous-time Markov chain and regime switching approximations with applications to options pricing. Springer.
 
     Q = zeros(grids, grids) 
     # Calculate the drift and diffusion coefficients
-    mean, variance = calculateSufficientStats(paramsHeston.nu, paramsHeston.mean_reversion_coeff, paramsHeston.kappa, paramsHeston.V0, paramsPayoff.maturity)    
+    mean, std_dev = calculateSufficientStats(paramsHeston.nu, paramsHeston.mean_reversion_coeff, paramsHeston.kappa, paramsHeston.V0, paramsPayoff.maturity)    
+    # calculate the boundary points for the approximation 
+    lower_bound = max(epsilon, mean - γ * std_dev)
+    upper_bound = mean + γ * std_dev
+    volatilitybins = calculateVolatilityBins(lower_bound, upper_bound, grids, type = "Uniform")
     
+    return Q
+
+
+end
+
+function RegimeSwitchingHestonGenerator(paramsHeston, paramsSim, paramsPayoff; volgrids = 100, pricegrids = 100, γ::Int32 = 5, epsilon = 0.0001)
+    # Calculate the CTMC generator approximating the volatility process in the Heston model.
+    # This process (rather the index of the process) is denoted by α(t) in the following paper:
+    # 1. Cui, Z., Lars Kirkby, J., & Nguyen, D. (2019). Continuous-time Markov chain and regime switching approximations with applications to options pricing. Springer.
+
+    Q = zeros(volgrids, volgrids) 
+    # Calculate the drift and diffusion coefficients
+    mean, std_dev = calculateSufficientStats(paramsHeston.nu, paramsHeston.mean_reversion_coeff, paramsHeston.kappa, paramsHeston.V0, paramsPayoff.maturity)    
+    # calculate the boundary points for the approximation 
+    lower_bound = max(epsilon, mean - γ * std_dev)
+    upper_bound = mean + γ * std_dev
+
+    # Calculate the grid points
+    volatilitybins = calculateVolatilityBins(lower_bound, upper_bound, volgrids, type = "Uniform")
+    return Q
 end
 
 function calculatevolatilityGenerator(paramsModel, paramsSim, paramsPayoff; model = "Heston")
