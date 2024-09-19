@@ -361,7 +361,6 @@ end
 function price_european_option_exponentiation(S0, V0, params::Dict, T, M, N, mapping_function_S, mapping_function_V, K, option_type; risk_free_rate=0.05)
     # Unpack parameters
     r = risk_free_rate
-
     # Construct variance levels and asset price levels
     V_min = max(0.0, params["theta"] - 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"]))
     V_max = params["theta"] + 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"])
@@ -375,10 +374,11 @@ function price_european_option_exponentiation(S0, V0, params::Dict, T, M, N, map
     Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
 
     # Compute the transition probability matrix
-    P = compute_transition_matrix(Q, T)
+    @time P = compute_transition_matrix(Q, T)
 
     # Construct the payoff vector
     G = construct_payoff_vector(V_levels, S_levels, K, option_type)
+    println("Payoff vector: ", G)
 
     # Define initial state
     # Find the indices closest to initial V0 and S0
@@ -391,6 +391,7 @@ function price_european_option_exponentiation(S0, V0, params::Dict, T, M, N, map
     π0[initial_state] = 1.0
 
     # Compute the option price
+
     option_price = exp(-r * T) * (π0'*P*G)[1]
 
     return option_price
@@ -404,28 +405,36 @@ end
 # ...
 
 # Example usage
-S0 = 100.0         # Initial stock price
-V0 = 0.04          # Initial variance
+linear_mapping(x) = x
+S0 = 10.0         # Initial stock price
+V0 = 0.04    
+# S0 = 10, v0 = 0.04, T = 1, K = 4, ρ = −0.75, σv = 0.15, η = 4, θ = 0.035, r = 0      # Initial variance
 params = Dict(
-    "r" => 0.05,        # Risk-free rate
+    "r" => 0.0,        # Risk-free rate
     "mu" => 0.05,        # Expected return
-    "kappa" => 1.5,      # Mean reversion rate
-    "theta" => 0.04,     # Long-term variance
-    "sigma" => 0.3,      # Volatility of variance
-    "rho" => -0.7        # Correlation between asset and variance
+    "kappa" => 4,      # Mean reversion rate
+    "theta" => 0.035,     # Long-term variance
+    "sigma" => 0.15,      # Volatility of variance
+    "rho" => -0.75        # Correlation between asset and variance
 )
 T = 1.0          # Time horizon (in years)
-M = 100            # Number of variance levels (states)
-N = 100           # Number of asset price levels (states)
+M = 75  # Number of variance levels (states)
+N = 75        # Number of asset price levels (states)
 # Choose the mapping function
-mapping_function_S = linear_mapping  # or any other mapping function
-mapping_function_V = linear_mapping
+mapping_function_S = linear_mapping
+mapping_function_V = linear_mapping  # or any other mapping function
+
 # Simulate the Heston model65
-Strike = 110.0
-times_asset, S, V_path, times_variance = simulate_heston_ctmc_general(S0, V0, params, T, M, mapping_function)
+Strike = 4.0
+times_asset, S, V_path, times_variance = simulate_heston_ctmc_general(S0, V0, params, T, M, mapping_function_V)
 
 plot(times_asset, S, label="Asset Price", xlabel="Time", ylabel="Price", legend=:topleft)
 # plot!(times_variance, V_path, label="Variance", xlabel="Time", ylabel="Variance", legend=:topleft)
 plot(times_variance, V_path, label="Variance", xlabel="Time", ylabel="Variance", legend=:topleft)
 
-European_call_price = price_european_option_exponentiation(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call")
+European_call_price = price_european_option_exponentiation(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call", risk_free_rate=0.0)
+
+
+# fast matrix exponentiation for tridiagonal such that row sum is zero
+
+option_price = exp(-r * T) * (π0'*P*G)[1]
