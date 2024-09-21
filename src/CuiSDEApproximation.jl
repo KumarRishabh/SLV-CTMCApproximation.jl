@@ -4,7 +4,7 @@ using LinearAlgebra
 using Plots
 using StatsBase
 using ExponentialUtilities  # For efficient matrix exponential computation
-
+using FastExpm
 """
 Constructs the generator matrix Q for the CTMC approximation using the general format.
 
@@ -17,9 +17,9 @@ Constructs the generator matrix Q for the CTMC approximation using the general f
 # Returns
 - `Q::Matrix{Float64}`: Generator matrix.
 """
-function construct_variance_levels(V_min, V_max, M, mapping_function)
-    ξ = range(0.0, 1.0, length=M)
-    V_levels = V_min .+ (V_max - V_min) .* mapping_function.(ξ)
+function construct_variance_levels(V_min, V_max, M, mapping_function, v_0; γ = 5)
+
+    V_levels = mapping_function(v_0, V_min, V_max, M, γ)
     return V_levels
 end
 
@@ -274,7 +274,8 @@ function construct_asset_price_generator(S_levels, V_levels, params)
 end
 
 function compute_transition_matrix(Q, T)
-    P = exp(Q * T)  # Matrix exponential
+    # P = exp(Q * T)
+    P = fastExpm(Q * T)  # Matrix exponential
     return P
 end
 
@@ -423,6 +424,7 @@ N = 75        # Number of asset price levels (states)
 # Choose the mapping function
 mapping_function_S = linear_mapping
 mapping_function_V = linear_mapping  # or any other mapping function
+
 
 # Simulate the Heston model65
 Strike = 4.0

@@ -5,7 +5,8 @@ names(FastExpm, all = true)
 
 A = Tridiagonal(rand(99), rand(100), rand(99))
 dense_A = Matrix(A)
-expA = fastExpm(dense_A)
+@time expA = fastExpm(dense_A)
+@time exp_A = exp(dense_A)
 println(expA)
 
 # Derive the option price model using: 
