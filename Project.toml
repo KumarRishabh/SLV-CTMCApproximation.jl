@@ -6,6 +6,7 @@ version = "1.0.0-DEV"
 [deps]
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+Expokit = "a1e7a1ef-7a5d-5822-a38c-be74e1bb89f4"
 ExponentialUtilities = "d4d017d3-3776-5f7e-afef-a10c40355c18"
 FastExpm = "7868e603-8603-432e-a1a1-694bd70b01f2"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"

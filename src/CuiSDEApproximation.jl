@@ -17,17 +17,28 @@ Constructs the generator matrix Q for the CTMC approximation using the general f
 # Returns
 - `Q::Matrix{Float64}`: Generator matrix.
 """
-function construct_variance_levels(V_min, V_max, M, mapping_function, v_0; γ = 5)
 
-    V_levels = mapping_function(v_0, V_min, V_max, M, γ)
+function arcsinh_mapping(ξ, V_0, V_min, V_max, M, γ) # this is what Lo and Skindilias used
+    c1 = asinh((V_min - V_0)/γ)
+    c2 = asinh((V_max - V_0)/γ)
+    return V_0 .+ γ * sinh.(c1 .+ ξ * (c2 - c1))
+end
+
+function linear_mapping(ξ, V_0, V_min, V_max, M, γ)
+    return V_min .+ ξ * (V_max - V_min)
+end
+function construct_variance_levels(V_min, V_max, M, mapping_function, v_0; γ = 5)
+    ξ = range(0.0, 1.0, length=M)
+    V_levels = mapping_function(ξ, v_0, V_min, V_max, M, γ)
     return V_levels
 end
 
-function construct_asset_price_levels(S_min, S_max, N, mapping_function)
+function construct_asset_price_levels(S_min, S_max, N, mapping_function, S_0; γ = 5)
     ξ = range(0.0, 1.0, length=N)
-    S_levels = S_min .+ (S_max - S_min) .* mapping_function.(ξ)
+    S_levels = mapping_function(ξ, S_0, S_min, S_max, N, γ)
     return S_levels
 end
+
 
 function simulate_variance_process(Q, V_levels, V0, T)
     M = length(V_levels)
@@ -314,7 +325,7 @@ function simulate_heston_ctmc_general(S0, V0, params::Dict, T, M, mapping_functi
     V_max = theta + 5 * sigma * sqrt(theta) / sqrt(2 * kappa)
 
     # Construct variance levels using the provided mapping function
-    V_levels = construct_variance_levels(V_min, V_max, M, mapping_function)
+    V_levels = construct_variance_levels(V_min, V_max, M, mapping_function, V0)
 
     # Construct generator matrix with general format
     Q, V_levels_adjusted = construct_generator_matrix_general(V_levels, kappa, theta, sigma)
@@ -365,11 +376,11 @@ function price_european_option_exponentiation(S0, V0, params::Dict, T, M, N, map
     # Construct variance levels and asset price levels
     V_min = max(0.0, params["theta"] - 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"]))
     V_max = params["theta"] + 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"])
-    V_levels = construct_variance_levels(V_min, V_max, M, mapping_function_V)
+    V_levels = construct_variance_levels(V_min, V_max, M, mapping_function_V, V0)
 
     S_min = S0 * 0.5  # Set based on expected range of asset prices
     S_max = S0 * 1.5
-    S_levels = construct_asset_price_levels(S_min, S_max, N, mapping_function_S)
+    S_levels = construct_asset_price_levels(S_min, S_max, N, mapping_function_S, S0)
 
     # Construct the combined generator matrix
     Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
@@ -406,7 +417,6 @@ end
 # ...
 
 # Example usage
-linear_mapping(x) = x
 S0 = 10.0         # Initial stock price
 V0 = 0.04    
 # S0 = 10, v0 = 0.04, T = 1, K = 4, ρ = −0.75, σv = 0.15, η = 4, θ = 0.035, r = 0      # Initial variance
@@ -419,11 +429,11 @@ params = Dict(
     "rho" => -0.75        # Correlation between asset and variance
 )
 T = 1.0          # Time horizon (in years)
-M = 75  # Number of variance levels (states)
-N = 75        # Number of asset price levels (states)
+M = 90 # Number of variance levels (states)
+N = 90        # Number of asset price levels (states)
 # Choose the mapping function
-mapping_function_S = linear_mapping
-mapping_function_V = linear_mapping  # or any other mapping function
+mapping_function_S = arcsinh_mapping
+mapping_function_V = arcsinh_mapping # or any other mapping function
 
 
 # Simulate the Heston model65
@@ -438,5 +448,122 @@ European_call_price = price_european_option_exponentiation(S0, V0, params, T, M,
 
 
 # fast matrix exponentiation for tridiagonal such that row sum is zero
+function compute_transition_matrices(Q, Δt_array)
+    P_matrices = []
+    for Δt in Δt_array
+        P = fastExpm(Q * Δt)
+        push!(P_matrices, P)
+    end
+    return P_matrices
+end
 
-option_price = exp(-r * T) * (π0'*P*G)[1]
+function initialize_option_values(V_levels, S_levels, K, option_type)
+    M = length(V_levels)
+    N = length(S_levels)
+    total_states = M * N
+    V_option = zeros(total_states)
+
+    for vi in 1:M
+        for si in 1:N
+            state_idx = (vi - 1) * N + si
+            S_i = S_levels[si]
+            if option_type == "call"
+                V_option[state_idx] = max(S_i - K, 0.0)
+            elseif option_type == "put"
+                V_option[state_idx] = max(K - S_i, 0.0)
+            else
+                error("Invalid option type. Choose 'call' or 'put'.")
+            end
+        end
+    end
+    return V_option
+end
+
+
+function backward_induction(P_matrices, V_option, V_levels, S_levels, K, option_type, r, Δt_array)
+    M = length(V_levels)
+    N = length(S_levels)
+    total_states = M * N
+    N_steps = length(P_matrices)
+
+    for n in N_steps:-1:1
+        P = P_matrices[n]
+        # Expected continuation value
+        continuation_value = real.(P * V_option)
+        # Immediate exercise value
+        exercise_value = zeros(total_states)
+        for state_idx in 1:total_states
+            si = (state_idx - 1) % N + 1
+            S_i = S_levels[si]
+            if option_type == "call"
+                exercise_value[state_idx] = max(S_i - K, 0.0)
+            elseif option_type == "put"
+                exercise_value[state_idx] = max(K - S_i, 0.0)
+            end
+        end
+        # Discount continuation value
+        continuation_value *= exp(-r * Δt_array[n])
+        # Update option value
+        V_option = max.(exercise_value, continuation_value)
+    end
+    return V_option
+end
+
+function price_american_option_ctmc(S0, V0, params::Dict, T, M, N, mapping_function_S, mapping_function_V, K, option_type, monitoring_times)
+    # Unpack parameters
+    r = params["r"]
+
+    # Construct variance levels and asset price levels
+    V_min = max(0.0, params["theta"] - 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"]))
+    V_max = params["theta"] + 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"])
+    V_levels = construct_variance_levels(V_min, V_max, M, mapping_function_V, V0)
+
+    S_min = S0 * 0.02  # Adjust as needed
+    S_max = S0 * 2.5
+    S_levels = construct_asset_price_levels(S_min, S_max, N, mapping_function_S, S0)
+
+    # Construct the combined generator matrix
+    Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
+
+    # Compute time intervals
+    Δt_array = diff(monitoring_times)
+
+    # Compute transition matrices
+    P_matrices = compute_transition_matrices(Q, Δt_array)
+
+    # Initialize option values at maturity
+    V_option = initialize_option_values(V_levels, S_levels, K, option_type)
+
+    # Perform backward induction
+    V_option = backward_induction(P_matrices, V_option, V_levels, S_levels, K, option_type, r, Δt_array)
+
+    # Find the initial state index
+    idx_V0 = findmin(abs.(V_levels .- V0))[2]
+    idx_S0 = findmin(abs.(S_levels .- S0))[2]
+    initial_state = (idx_V0 - 1) * N + idx_S0
+
+    # Option price is the option value at the initial state
+    option_price = V_option[initial_state]
+
+    return option_price
+end
+
+monitoring_times = collect(0.0:0.05:T)
+
+# Price the American option
+option_price = price_american_option_ctmc(S0, V0, params, T, M, N, linear_mapping, linear_mapping, Strike, "call", monitoring_times)
+
+println("American Call option price using CTMC: $option_price")
+
+function KrylovSubspaceExponentiation(A::Tridiagonal, v::Vector, t::Float64)
+    n = length(v)
+    expv = zeros(n)
+    expv .= v
+    for i in 1:n
+        expv[i] = expv[i] * exp(A.dv[i] * t)
+    end
+    for i in 1:n-1
+        expv[i] = expv[i] + A.ev[i] * v[i] * (exp(A.dv[i] * t) - 1)
+    end
+    return expv
+end

@@ -343,7 +343,7 @@ function KahlJackelVectorized(S0, V0, T, N, params, Δt = 1e-6)
     return exp.(logS), V
 end
 
-function KahlJackelVectorizedDixit(S0, V0, T, N, params; Δt = 1e-6)
+function KahlJackelVectorized(S0, V0, T, N, params; Δt = 1e-6)
     V = zeros(Float64, N, T+1)
     logS = zeros(Float64, N, T+1)
     V[:, 1] .= V0
