@@ -5,7 +5,8 @@ using Plots
 using StatsBase
 using ExponentialUtilities  # For efficient matrix exponential computation
 using FastExpm
-using KrylovKit
+using Expokit
+using Revise
 """
 Constructs the generator matrix Q for the CTMC approximation using the general format.
 
@@ -447,8 +448,9 @@ function European_call_price_krylov(S0, V0, params::Dict, T, M, N, mapping_funct
     # Compute w_tilde = exp(Q^T t) * v
     Q_transpose = transpose(Q)
 
-    w_tilde, _ = KrylovKit.expmv(Q_transpose, π0, T)
+    w_tilde = expmv(T, Q_transpose, π0; tol = 1e-6, m = 20)
     option_price = exp(-r * T) * dot(w_tilde, G)
+    println("w_tilde: ")
 
     return option_price
 end
@@ -473,8 +475,8 @@ params = Dict(
     "rho" => -0.75        # Correlation between asset and variance
 )
 T = 1.0          # Time horizon (in years)
-M = 90 # Number of variance levels (states)
-N = 90        # Number of asset price levels (states)
+M = 80 # Number of variance levels (states)
+N = 80        # Number of asset price levels (states)
 # Choose the mapping function
 mapping_function_S = arcsinh_mapping
 mapping_function_V = arcsinh_mapping # or any other mapping function
@@ -488,8 +490,8 @@ plot(times_asset, S, label="Asset Price", xlabel="Time", ylabel="Price", legend=
 # plot!(times_variance, V_path, label="Variance", xlabel="Time", ylabel="Variance", legend=:topleft)
 plot(times_variance, V_path, label="Variance", xlabel="Time", ylabel="Variance", legend=:topleft)
 
-European_call_price = price_european_option_exponentiation(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call", risk_free_rate=0.0)
-European_call_price_krylov = European_call_price_krylov(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call", risk_free_rate=0.0)
+# European_call_price = price_european_option_exponentiation(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call", risk_free_rate=0.0)
+European_call_price = European_call_price_krylov(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call"; risk_free_rate=0.0)
 
 # fast matrix exponentiation for tridiagonal such that row sum is zero
 function compute_transition_matrices(Q, Δt_array)
