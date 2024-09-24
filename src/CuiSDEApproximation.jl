@@ -5,6 +5,7 @@ using Plots
 using StatsBase
 using ExponentialUtilities  # For efficient matrix exponential computation
 using FastExpm
+using KrylovKit
 """
 Constructs the generator matrix Q for the CTMC approximation using the general format.
 
@@ -408,6 +409,49 @@ function price_european_option_exponentiation(S0, V0, params::Dict, T, M, N, map
 
     return option_price
 end
+
+function European_call_price_krylov(S0, V0, params::Dict, T, M, N, mapping_function_S, mapping_function_V, K, option_type; risk_free_rate=0.0)
+    # Unpack parameters
+    r = risk_free_rate
+    # Construct variance levels and asset price levels
+    V_min = max(0.0, params["theta"] - 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"]))
+    V_max = params["theta"] + 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"])
+    V_levels = construct_variance_levels(V_min, V_max, M, mapping_function_V, V0)
+
+    S_min = S0 * 0.5  # Set based on expected range of asset prices
+    S_max = S0 * 1.5
+    S_levels = construct_asset_price_levels(S_min, S_max, N, mapping_function_S, S0)
+
+    # Construct the combined generator matrix
+    Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
+
+    # Compute the transition probability matrix
+    @time P = compute_transition_matrix(Q, T)
+
+    # Construct the payoff vector
+    G = construct_payoff_vector(V_levels, S_levels, K, option_type)
+    println("Payoff vector: ", G)
+
+    # Define initial state
+    # Find the indices closest to initial V0 and S0
+    idx_V0 = findmin(abs.(V_levels .- V0))[2]
+    idx_S0 = findmin(abs.(S_levels .- S0))[2]
+    initial_state = (idx_V0 - 1) * N + idx_S0
+
+    # Initial distribution vector
+    π0 = zeros(length(G))
+    π0[initial_state] = 1.0
+
+    # Compute the option price
+    # option_price = exp(-r * T) * (π0'*P*G)[1]
+    # Compute w_tilde = exp(Q^T t) * v
+    Q_transpose = transpose(Q)
+
+    w_tilde, _ = KrylovKit.expmv(Q_transpose, π0, T)
+    option_price = exp(-r * T) * dot(w_tilde, G)
+
+    return option_price
+end
 # The rest of the functions remain the same:
 # - construct_variance_levels
 # - simulate_variance_process
@@ -445,7 +489,7 @@ plot(times_asset, S, label="Asset Price", xlabel="Time", ylabel="Price", legend=
 plot(times_variance, V_path, label="Variance", xlabel="Time", ylabel="Variance", legend=:topleft)
 
 European_call_price = price_european_option_exponentiation(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call", risk_free_rate=0.0)
-
+European_call_price_krylov = European_call_price_krylov(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call", risk_free_rate=0.0)
 
 # fast matrix exponentiation for tridiagonal such that row sum is zero
 function compute_transition_matrices(Q, Δt_array)
@@ -555,15 +599,3 @@ option_price = price_american_option_ctmc(S0, V0, params, T, M, N, linear_mappin
 
 println("American Call option price using CTMC: $option_price")
 
-function KrylovSubspaceExponentiation(A::Tridiagonal, v::Vector, t::Float64)
-    n = length(v)
-    expv = zeros(n)
-    expv .= v
-    for i in 1:n
-        expv[i] = expv[i] * exp(A.dv[i] * t)
-    end
-    for i in 1:n-1
-        expv[i] = expv[i] + A.ev[i] * v[i] * (exp(A.dv[i] * t) - 1)
-    end
-    return expv
-end
