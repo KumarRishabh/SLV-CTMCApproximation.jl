@@ -7,6 +7,9 @@ using ExponentialUtilities  # For efficient matrix exponential computation
 using FastExpm
 using Expokit
 using Revise
+using SparseArrays
+using ProgressMeter
+
 """
 Constructs the generator matrix Q for the CTMC approximation using the general format.
 
@@ -29,6 +32,7 @@ end
 function linear_mapping(ξ, V_0, V_min, V_max, M, γ)
     return V_min .+ ξ * (V_max - V_min)
 end
+
 function construct_variance_levels(V_min, V_max, M, mapping_function, v_0; γ = 5)
     ξ = range(0.0, 1.0, length=M)
     V_levels = mapping_function(ξ, v_0, V_min, V_max, M, γ)
@@ -94,7 +98,8 @@ end
 
 function construct_generator_matrix_general(V_levels, kappa, theta, sigma)
     M = length(V_levels)
-    Q = zeros(M, M)
+    # Q = zeros(M, M) (Unoptimized 1)
+    Q = spzeros(M, M) # (Optimization 1)
 
     # Calculate m(s_i) and s^2(s_i) at each grid point
     m_s = kappa .* (theta .- V_levels)
@@ -120,10 +125,19 @@ function construct_generator_matrix_general(V_levels, kappa, theta, sigma)
     # end
 
     # Recalculate V_levels based on adjusted k_i if necessary
-    V_levels_adjusted = [V_levels[1]]
-    for i in 1:M-1
-        V_levels_adjusted = [V_levels_adjusted; V_levels_adjusted[end] + k[i]]
+    # V_levels_adjusted = [V_levels[1]]
+    # for i in 1:M-1
+    #     V_levels_adjusted = [V_levels_adjusted; V_levels_adjusted[end] + k[i]]
+    # end# Instead of this (Unoptimized 2)
+
+
+# Use this (Optimiztion 2)
+    V_levels_adjusted = Vector{Float64}(undef, M)
+    V_levels_adjusted[1] = V_levels[1]
+    for i in 2:M
+        V_levels_adjusted[i] = V_levels_adjusted[i-1] + k[i-1]
     end
+
 
     # Update m_s, s2_s, m_plus, m_minus with adjusted V_levels
     V_levels = V_levels_adjusted
@@ -186,11 +200,13 @@ Main function to simulate Heston model paths using CTMC approximation with gener
 - `times_variance::Vector{Float64}`: Times of the variance process.
 """
 
+
 function construct_combined_generator_matrix(V_levels, S_levels, params)
     M = length(V_levels)
     N = length(S_levels)
     total_states = M * N
-    Q = zeros(total_states, total_states)  # Sparse matrix for efficiency
+    # Q = zeros(total_states, total_states)  # Sparse matrix for efficiency (Unoptimized 3)
+    Q = spzeros(total_states, total_states) # (Optimization 3)
 
     # Retrieve parameters
     kappa = params["kappa"]
@@ -231,7 +247,6 @@ function construct_combined_generator_matrix(V_levels, S_levels, params)
 
     return Q, V_levels, S_levels
 end
-
 function construct_asset_price_generator(S_levels, V_levels, params)
     N = length(S_levels)
     M = length(V_levels)
@@ -462,36 +477,7 @@ end
 # Example mapping functions (as before)
 # ...
 
-# Example usage
-S0 = 10.0         # Initial stock price
-V0 = 0.04    
-# S0 = 10, v0 = 0.04, T = 1, K = 4, ρ = −0.75, σv = 0.15, η = 4, θ = 0.035, r = 0      # Initial variance
-params = Dict(
-    "r" => 0.0,        # Risk-free rate
-    "mu" => 0.05,        # Expected return
-    "kappa" => 4,      # Mean reversion rate
-    "theta" => 0.035,     # Long-term variance
-    "sigma" => 0.15,      # Volatility of variance
-    "rho" => -0.75        # Correlation between asset and variance
-)
-T = 1.0          # Time horizon (in years)
-M = 80 # Number of variance levels (states)
-N = 80        # Number of asset price levels (states)
-# Choose the mapping function
-mapping_function_S = arcsinh_mapping
-mapping_function_V = arcsinh_mapping # or any other mapping function
 
-
-# Simulate the Heston model65
-Strike = 4.0
-times_asset, S, V_path, times_variance = simulate_heston_ctmc_general(S0, V0, params, T, M, mapping_function_V)
-
-plot(times_asset, S, label="Asset Price", xlabel="Time", ylabel="Price", legend=:topleft)
-# plot!(times_variance, V_path, label="Variance", xlabel="Time", ylabel="Variance", legend=:topleft)
-plot(times_variance, V_path, label="Variance", xlabel="Time", ylabel="Variance", legend=:topleft)
-
-# European_call_price = price_european_option_exponentiation(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call", risk_free_rate=0.0)
-European_call_price = European_call_price_krylov(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call"; risk_free_rate=0.0)
 
 # fast matrix exponentiation for tridiagonal such that row sum is zero
 function compute_transition_matrices(Q, Δt_array)
@@ -568,18 +554,20 @@ function price_american_option_ctmc(S0, V0, params::Dict, T, M, N, mapping_funct
     S_max = S0 * 2.5
     S_levels = construct_asset_price_levels(S_min, S_max, N, mapping_function_S, S0)
 
+    println("Constructed asset and variance levels:", S_levels, V_levels)
     # Construct the combined generator matrix
     Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
+    println("Constructed combined generator matrix")
 
     # Compute time intervals
     Δt_array = diff(monitoring_times)
 
     # Compute transition matrices
     P_matrices = compute_transition_matrices(Q, Δt_array)
-
+    println("Computed transition matrices")
     # Initialize option values at maturity
     V_option = initialize_option_values(V_levels, S_levels, K, option_type)
-
+    println("Initialized option values at maturity")
     # Perform backward induction
     V_option = backward_induction(P_matrices, V_option, V_levels, S_levels, K, option_type, r, Δt_array)
 
@@ -594,10 +582,41 @@ function price_american_option_ctmc(S0, V0, params::Dict, T, M, N, mapping_funct
     return option_price
 end
 
-monitoring_times = collect(0.0:0.05:T)
+# Example usage
+# S0 = 10.0         # Initial stock price
+# V0 = 0.04    
+# # S0 = 10, v0 = 0.04, T = 1, K = 4, ρ = −0.75, σv = 0.15, η = 4, θ = 0.035, r = 0      # Initial variance
+# params = Dict(
+#     "r" => 0.0,        # Risk-free rate
+#     "mu" => 0.05,        # Expected return
+#     "kappa" => 4,      # Mean reversion rate
+#     "theta" => 0.035,     # Long-term variance
+#     "sigma" => 0.15,      # Volatility of variance
+#     "rho" => -0.75        # Correlation between asset and variance
+# )
+# T = 1.0          # Time horizon (in years)
+# M = 20 # Number of variance levels (states)
+# N = 20        # Number of asset price levels (states)
+# # Choose the mapping function
+# mapping_function_S = arcsinh_mapping
+# mapping_function_V = arcsinh_mapping # or any other mapping function
 
-# Price the American option
-option_price = price_american_option_ctmc(S0, V0, params, T, M, N, linear_mapping, linear_mapping, Strike, "call", monitoring_times)
 
-println("American Call option price using CTMC: $option_price")
+# # Simulate the Heston model65
+# Strike = 4.0
+# times_asset, S, V_path, times_variance = simulate_heston_ctmc_general(S0, V0, params, T, M, mapping_function_V)
+
+# plot(times_asset, S, label="Asset Price", xlabel="Time", ylabel="Price", legend=:topleft)
+# # plot!(times_variance, V_path, label="Variance", xlabel="Time", ylabel="Variance", legend=:topleft)
+# plot(times_variance, V_path, label="Variance", xlabel="Time", ylabel="Variance", legend=:topleft)
+
+# # European_call_price = price_european_option_exponentiation(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call", risk_free_rate=0.0)
+# European_call_price = European_call_price_krylov(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call"; risk_free_rate=0.0)
+
+# monitoring_times = collect(0.0:0.05:T)
+
+# # Price the American option
+# option_price = price_american_option_ctmc(S0, V0, params, T, M, N, linear_mapping, linear_mapping, Strike, "call", monitoring_times)
+
+# println("American Call option price using CTMC: $option_price")
 
