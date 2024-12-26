@@ -1,7 +1,9 @@
-using Parameters
-using Plots
 
 module SLVCTMCApproximation
+# using Parameters
+using Plots
+
+
 using LinearAlgebra
 using Random
 using Distributions
