@@ -9,19 +9,7 @@ using Expokit
 using Revise
 using SparseArrays
 using ProgressMeter
-
-using Random
-using Distributions
-using LinearAlgebra
-using Plots
-using StatsBase
-using ExponentialUtilities  # For efficient matrix exponential computation
-using FastExpm
-using Expokit
-using Revise
-using SparseArrays
-using ProgressMeter
-
+using Parameters
 """
 Constructs the generator matrix Q for the CTMC approximation using the general format.
 
@@ -34,6 +22,36 @@ Constructs the generator matrix Q for the CTMC approximation using the general f
 # Returns
 - `Q::Matrix{Float64}`: Generator matrix.
 """
+# Set parameter values for the Heston model using Paramters.jl
+@with_kw mutable struct HestonParams
+    S0::Float64 = 100.0
+    μ_h::Float64 = 0.02
+    ν::Float64 = 0.085
+    θ_h::Float64 = 0.04
+    κ_h::Float64 = 6.21
+    ρ::Float64 = -0.7
+    v0::Float64 = 0.501
+end
+
+# Set parameter values for the SABR model using Paramters.jl
+@with_kw mutable struct SABRParams
+    S0::Float64 = 100.0
+    β::Float64 = 0.5
+    κ_s::Float64 = 6.00
+    ρ::Float64 = -0.75
+    v0::Float64 = 0.11
+end
+
+# Set parameter values for the 3/2 model using Paramters.jl
+@with_kw mutable struct ThreeTwoParams
+    S0::Float64 = 100.0
+    μ_32::Float64 = 0.02
+    ν_32::Float64 = 0.424
+    θ_32::Float64 = 0.04
+    κ_32::Float64 = 6.00
+    ρ::Float64 = -0.7
+    v0::Float64 = 0.501
+end
 
 function arcsinh_mapping(ξ, V_0, V_min, V_max, M, γ) # this is what Lo and Skindilias used
     c1 = asinh((V_min - V_0)/γ)
@@ -41,7 +59,7 @@ function arcsinh_mapping(ξ, V_0, V_min, V_max, M, γ) # this is what Lo and Ski
     return V_0 .+ γ * sinh.(c1 .+ ξ * (c2 - c1))
 end
 
-function linear_mapping(ξ, V_0, V_min, V_max, M, γ)
+function linear_mapping(ξ, V_0, V_min, V_max, M, γ) # this is what we use
     return V_min .+ ξ * (V_max - V_min)
 end
 
@@ -107,92 +125,89 @@ function simulate_variance_process(Q, V_levels, V0, T)
     return times, V_path, idx_v_path
 end
 
-# TODO: Implement the double death approximation for the combined process
-function construct_DD_generator_matrix_general(V_levels, kappa, theta, sigma)
-    M = length(V_levels)
-    # Q = zeros(M, M) (Unoptimized 1)
-    Q = spzeros(M, M) # (Optimization 1)
+"""
+The double operations approximation constructs the generator matrix Q for the CTMC approximation
+for the joint asset price and variance process. It contains both the double births and double deaths
+along with the transfer rates between asset price and variance levels. 
 
-    # Calculate m(s_i) and s^2(s_i) at each grid point
-    m_s = kappa .* (theta .- V_levels)
-    s2_s = sigma^2 .* V_levels
+Consider the following class of models: 
+$$
+    d \begin{pmatrix} S_t \\ V_t \end{pmatrix} = \begin{pmatrix} b_1(S_t, V_t) \\ b_2(V_t) \end{pmatrix} dt + \begin{pmatrix} \sigma_{11}(S_t, V_t) & \sigma_{12}(S_t, V_t) \\ 0 & \sigma_{22}(V_t) \end{pmatrix} d \begin{pmatrix} B_t \\ \beta_t \end{pmatrix}
+$$
 
-    # Calculate m^+(s_i) and m^-(s_i)
-    m_plus = max.(0.0, m_s)
-    m_minus = max.(0.0, -m_s)
+Then the generator matrix Q is constructed as follows: 
+$$
+a_{1,0}^N &= N b_1^+\left(\frac{\ell}{N}\right) + \frac{N^2}{2} \left(\sigma_{11}^2\left(\frac{\ell}{N}\right) + \sigma_{12}^2\left(\frac{\ell}{N}\right) - |\sigma_{12}\left(\frac{\ell}{N}\right)| \sigma_{22}\left(\frac{\ell}{N}\right)\right), \\
+a_{0,1}^N &= N b_2^+\left(\frac{\ell}{N}\right) + \frac{N^2}{2} \left(\sigma_{22}^2\left(\frac{\ell}{N}\right) - |\sigma_{12}\left(\frac{\ell}{N}\right)| \sigma_{22}\left(\frac{\ell}{N}\right)\right), \\
+s_{1,0}^N &= N b_1^-\left(\frac{\ell}{N}\right) + \frac{N^2}{2} \left(\sigma_{11}^2\left(\frac{\ell}{N}\right) + \sigma_{12}^2\left(\frac{\ell}{N}\right) - |\sigma_{12}\left(\frac{\ell}{N}\right)| \sigma_{22}\left(\frac{\ell}{N}\right)\right), \\
+s_{0,1}^N &= N b_2^-\left(\frac{\ell}{N}\right) + \frac{N^2}{2} \left(\sigma_{22}^2\left(\frac{\ell}{N}\right) - |\sigma_{12}\left(\frac{\ell}{N}\right)| \sigma_{22}\left(\frac{\ell}{N}\right)\right).
+$$
 
-    # Calculate k_i (differences between grid points)
-    k = diff(V_levels)  # Length M - 1
-
-    # Enforce the constraints on k_i
-    # for i in 1:M-1
-    #     k_i = k[i]
-    #     # Constraint: k_i ≤ s2_s[i] / |m_s[i]|
-    #     if abs(m_s[i]) > 1e-8  # Avoid division by zero
-    #         max_k_i = s2_s[i] / abs(m_s[i])
-    #         if k_i > max_k_i
-    #             k[i] = max_k_i
-    #         end
-    #     end
-    # end
-
-    # Recalculate V_levels based on adjusted k_i if necessary
-    # V_levels_adjusted = [V_levels[1]]
-    # for i in 1:M-1
-    #     V_levels_adjusted = [V_levels_adjusted; V_levels_adjusted[end] + k[i]]
-    # end# Instead of this (Unoptimized 2)
+Where a_{1, 0} is the transition from S_t \to S_t + \ell and a_{0, 1} is the transition from V_t \to V_t + \ell.
+and s_{1, 0} is the transition from S_t \to S_t - \ell and s_{0, 1} is the transition from V_t \to V_t - \ell.
 
 
-# Use this (Optimiztion 2)
-    V_levels_adjusted = Vector{Float64}(undef, M)
-    V_levels_adjusted[1] = V_levels[1]
-    for i in 2:M
-        V_levels_adjusted[i] = V_levels_adjusted[i-1] + k[i-1]
-    end
+Simultaneous transitions between price and volatility are given by:
+$$
+    a_{1,1}^N &= s_{1,1}^N = \frac{N^2}{2} \sigma_{12}^+\left(\frac{l}{N}\right) \sigma_{22}\left(\frac{l}{N}\right), \\
+    t_{1 \to 2}^N &= t_{2 \to 1}^N = \frac{N^2}{2} \sigma_{12}^-\left(\frac{l}{N}\right) \sigma_{22}\left(\frac{l}{N}\right).
+$$
+where \( a_{1, 1}^N \) is the transition for (S_t, V_t) \to (S_t + \ell, V_t + \ell), \( s_{1, 1}^N \) is the transition for (S_t, V_t) \to (S_t - \ell, V_t - \ell), \( t_{1 \to 2}^N \) is the transition for (S_t, V_t) \to (S_t + \ell, V_t - \ell), and \( t_{2 \to 1}^N \) is the transition for (S_t, V_t) \to (S_t - \ell, V_t + \ell).
+"""
 
+heston_b1(S, V; params = heston_params) = params.μ_h * S
+heston_b2(V; params = heston_params) = params.ν_h * (params.θ_h - V)
+heston_σ_11(S, V; params = heston_params) = sqrt(1 - params.ρ^2) * sqrt(V) * S
+heston_σ_12(S, V; params = heston_params) = params.ρ * sqrt(V) * S
+heston_σ_22(V; params = heston_params) = params.κ_h * sqrt(V)
 
-    # Update m_s, s2_s, m_plus, m_minus with adjusted V_levels
-    V_levels = V_levels_adjusted
-    m_s = kappa .* (theta .- V_levels)
-    s2_s = sigma^2 .* V_levels
-    m_plus = max.(0.0, m_s)
-    m_minus = max.(0.0, -m_s)
+b1_SABR(S, V; params = SABR_params) = 0
+b2_SABR(V; params = SABR_params) = 0
+σ11_SABR(S, V; params = SABR_params) = sqrt(1 - params.ρ^2) * sqrt(V) * S^params.β
+σ12_SABR(S, V; params = SABR_params) = params.ρ * V * S^params.β
+σ22_SABR(V; params = SABR_params) = params.κ_s * V
 
-    # Construct Q matrix
-    for i in 1:M
-        # For interior points
-        if i > 1 && i < M
-            k_i_minus1 = k[i - 1]
-            k_i = k[i]
-            denominator = k_i_minus1 + k_i
+# since 3/2 model is similar to heston model, we can use the same functions
+b1_32(S, V; params = threetwo_params) = params.μ_32 * S
+b2_32(V; params = threetwo_params) = params.ν_32 * (params.θ_32 - V^2)
+σ11_32(S, V; params = threetwo_params) = sqrt(1 - params.ρ^2) * sqrt(V) * S
+σ12_32(S, V; params = threetwo_params) = params.ρ * sqrt(V) * S
+σ22_32(V; params = threetwo_params) = params.κ_32 * V^(3/2)
 
-            q_im1 = (m_minus[i] / k_i_minus1) + (s2_s[i] - (k_i_minus1 * m_minus[i] + k_i * m_plus[i])) / (k_i_minus1 * denominator)
-            q_ip1 = (m_plus[i] / k_i) + (s2_s[i] - (k_i_minus1 * m_minus[i] + k_i * m_plus[i])) / (k_i * denominator)
+pos(x) = max(x, 0)
+neg(x) = max(-x, 0)
 
-            Q[i, i - 1] = max(q_im1, 0.0)
-            Q[i, i + 1] = max(q_ip1, 0.0)
-        elseif i == 1 && M > 1
-            # First point (no i - 1)
-            k_i = k[i]
-            denominator = k_i
-            q_ip1 = (m_plus[i] / k_i) + (s2_s[i] - (0.0 + k_i * m_plus[i])) / (k_i * denominator)
-            Q[i, i + 1] = max(q_ip1, 0.0)
-            println("Q[1, 2]: ", Q[1, 2])
-        elseif i == M && M > 1
-            # Last point (no i + 1)
-            k_i_minus1 = k[i - 1]
-            denominator = k_i_minus1
-            q_im1 = (m_minus[i] / k_i_minus1) + (s2_s[i] - (k_i_minus1 * m_minus[i] + 0.0)) / (k_i_minus1 * denominator)
-            Q[i, i - 1] = max(q_im1, 0.0)
-            println("Q[M, M-1]: ", Q[M, M-1])
-        end
-
-        # Diagonal element
-        Q[i, i] = -sum(Q[i, :])
-    end
-
-    return Q, V_levels
+function transition_rates(S, V, N)
+    a10 = N * pos(b1(S, V)) + (N^2 / 2) * (sigma11(S, V)^2 + sigma12(S, V)^2 - abs(sigma12(S, V)) * sigma22(V))
+    s10 = N * neg(b1(S, V)) + (N^2 / 2) * (sigma11(S, V)^2 + sigma12(S, V)^2 - abs(sigma12(S, V)) * sigma22(V))
+    a01 = N * pos(b2(V)) + (N^2 / 2) * (sigma22(V)^2 - abs(sigma12(S, V)) * sigma22(V))
+    s01 = N * neg(b2(V)) + (N^2 / 2) * (sigma22(V)^2 - abs(sigma12(S, V)) * sigma22(V))
+    a11 = s11 = (N^2 / 2) * pos(sigma12(S, V)) * sigma22(V)
+    t12 = t21 = (N^2 / 2) * neg(sigma12(S, V)) * sigma22(V)
+    return (a10, s10, a01, s01, a11, s11, t12, t21)
 end
+
+# Construct Q matrix functionally
+function construct_Q(N, ℓ)
+    Q = spzeros(N*N, N*N)
+    for i in 1:N, j in 1:N
+        idx = (i - 1) * N + j
+        S, V = i * ℓ, j * ℓ
+        a10, s10, a01, s01, a11, s11, t12, t21 = transition_rates(S, V, N)
+        
+        if i < N Q[idx, idx + N] = a10 end
+        if i > 1 Q[idx, idx - N] = s10 end
+        if j < N Q[idx, idx + 1] = a01 end
+        if j > 1 Q[idx, idx - 1] = s01 end
+        if i < N && j < N Q[idx, idx + N + 1] = a11 end
+        if i > 1 && j > 1 Q[idx, idx - N - 1] = s11 end
+        if i < N && j > 1 Q[idx, idx + N - 1] = t12 end
+        if i > 1 && j < N Q[idx, idx - N + 1] = t21 end
+        Q[idx, idx] = -sum(Q[idx, :])
+    end
+    return Q
+end
+
 
 """
 Main function to simulate Heston model paths using CTMC approximation with general generator matrix.
@@ -211,107 +226,6 @@ Main function to simulate Heston model paths using CTMC approximation with gener
 - `V_path::Vector{Float64}`: Variance levels over time.
 - `times_variance::Vector{Float64}`: Times of the variance process.
 """
-
-
-function construct_combined_generator_matrix(V_levels, S_levels, params)
-    M = length(V_levels)
-    N = length(S_levels)
-    total_states = M * N
-    # Q = zeros(total_states, total_states)  # Sparse matrix for efficiency (Unoptimized 3)
-    Q = spzeros(total_states, total_states) # (Optimization 3)
-
-    # Retrieve parameters
-    kappa = params["kappa"]
-    theta = params["theta"]
-    sigma = params["sigma"]
-    rho = params["rho"]
-    r = params["r"]  # Risk-free rate
-
-    # Construct generator for variance process (as before)
-    Q_V, V_levels = construct_generator_matrix_general(V_levels, kappa, theta, sigma)
-
-    # Construct generator for asset price process
-    # For simplicity, we can use a finite difference approximation for the asset price generator
-    Q_S = construct_asset_price_generator(S_levels, V_levels, params)
-
-    # Combine the generators
-    for vi in 1:M
-        for si in 1:N
-            state_idx = (vi - 1) * N + si
-
-            # Variance transitions
-            for vj in 1:M
-                if Q_V[vi, vj] != 0
-                    target_idx = (vj - 1) * N + si
-                    Q[state_idx, target_idx] += Q_V[vi, vj]
-                end
-            end
-
-            # Asset price transitions
-            for sj in 1:N
-                if Q_S[si, sj, vi] != 0
-                    target_idx = (vi - 1) * N + sj
-                    Q[state_idx, target_idx] += Q_S[si, sj, vi]
-                end
-            end
-        end
-    end
-
-    return Q, V_levels, S_levels
-end
-function construct_asset_price_generator(S_levels, V_levels, params)
-    N = length(S_levels)
-    M = length(V_levels)
-    Q_S = zeros(N, N, M)
-
-    r = params["r"]
-    rho = params["rho"]
-
-    for vi in 1:M
-        v_i = V_levels[vi]
-
-        # Drift and diffusion coefficients for the asset price process
-        m_s = r * S_levels  # Risk-neutral drift
-        s2_s = (sqrt(v_i) * S_levels) .^ 2  # Diffusion term
-
-        # Calculate k_i (differences between S_levels)
-        k = diff(S_levels)
-
-        # Transition rates for asset price process
-        for si in 1:N
-            s_i = S_levels[si]
-
-            if si > 1 && si < N
-                k_i_minus1 = k[si-1]
-                k_i = k[si]
-                denominator = k_i_minus1 + k_i
-
-                q_im1 = ((s2_s[si]) / (k_i_minus1 * denominator)) - (m_s[si] / denominator)
-                q_ip1 = ((s2_s[si]) / (k_i * denominator)) + (m_s[si] / denominator)
-
-                Q_S[si, si-1, vi] = max(q_im1, 0.0)
-                Q_S[si, si+1, vi] = max(q_ip1, 0.0)
-            elseif si == 1 && N > 1
-                k_i = k[si]
-                denominator = k_i * k_i
-
-                q_ip1 = ((s2_s[si]) / (k_i * denominator)) + (m_s[si] / denominator)
-                Q_S[si, si+1, vi] = max(q_ip1, 0.0)
-            elseif si == N && N > 1
-                k_i_minus1 = k[si-1]
-                denominator = k_i_minus1 * k_i_minus1
-
-                q_im1 = ((s2_s[si]) / (k_i_minus1 * denominator)) - (m_s[si] / denominator)
-                Q_S[si, si-1, vi] = max(q_im1, 0.0)
-            end
-
-            # Diagonal element
-            Q_S[si, si, vi] = -sum(Q_S[si, :, vi])
-        end
-    end
-
-    return Q_S
-end
 
 function compute_transition_matrix(Q, T)
     # P = exp(Q * T)

@@ -446,7 +446,7 @@ function European_call_price_krylov(S0, V0, params::Dict, T, M, N, mapping_funct
 
     # Construct the payoff vector
     G = construct_payoff_vector(V_levels, S_levels, K, option_type)
-    println("Payoff vector: ", G)
+    # println("Payoff vector: ", G)
 
     # Define initial state
     # Find the indices closest to initial V0 and S0

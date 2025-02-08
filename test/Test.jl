@@ -64,3 +64,13 @@ function milstein_discretization(S0, V0, n, N, M, T, params; epsilon=1e-3)
     end
     return S, V
 end
+
+using Random, Distributions
+using StatsBase
+probs = [0.1, 0.3, 0.6] # Example probabilities
+w = Weights(probs)  # Convert to weighted probabilities
+
+# Sample an index based on the weights
+selected_index = sample(1:3, w)
+
+println("Sampled Index: ", selected_index)

@@ -1,6 +1,7 @@
+using Parameters
 
 module SLVCTMCApproximation
-# using Parameters
+using Parameters
 using Plots
 
 
