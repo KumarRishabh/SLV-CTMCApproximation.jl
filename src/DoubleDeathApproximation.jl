@@ -1,28 +1,29 @@
+module DoubleDeathApproximation
+
 using Random
 using Distributions
 using LinearAlgebra
-using Plots
+using SparseArrays
 using StatsBase
 using ExponentialUtilities  # For efficient matrix exponential computation
 using FastExpm
 using Expokit
-using Revise
-using SparseArrays
-using ProgressMeter
 using Parameters
-"""
-Constructs the generator matrix Q for the CTMC approximation using the general format.
+using ProgressMeter
+using Revise
+using Test
+# Exported functions and types
+export arcsinh_mapping, linear_mapping, construct_variance_levels, construct_asset_price_levels,
+       simulate_variance_process, simulate_asset_price, compute_transition_matrix, compute_transition_matrices,
+       construct_Q, construct_generator_matrix_general, price_european_option_double_death, construct_combined_generator_matrix,
+       construct_payoff_vector, price_european_option_exponentiation, European_call_price_krylov,
+       price_american_option_ctmc, initialize_option_values, backward_induction,
+       HestonParams, SABRParams, ThreeTwoParams
 
-# Arguments
-- `V_levels::Vector{Float64}`: Variance levels (grid points).
-- `kappa::Float64`: Mean reversion rate.
-- `theta::Float64`: Long-term variance.
-- `sigma::Float64`: Volatility of variance.
+#############
+# Type Definitions
+#############
 
-# Returns
-- `Q::Matrix{Float64}`: Generator matrix.
-"""
-# Set parameter values for the Heston model using Paramters.jl
 @with_kw mutable struct HestonParams
     S0::Float64 = 100.0
     μ_h::Float64 = 0.02
@@ -33,7 +34,6 @@ Constructs the generator matrix Q for the CTMC approximation using the general f
     v0::Float64 = 0.501
 end
 
-# Set parameter values for the SABR model using Paramters.jl
 @with_kw mutable struct SABRParams
     S0::Float64 = 100.0
     β::Float64 = 0.5
@@ -42,7 +42,6 @@ end
     v0::Float64 = 0.11
 end
 
-# Set parameter values for the 3/2 model using Paramters.jl
 @with_kw mutable struct ThreeTwoParams
     S0::Float64 = 100.0
     μ_32::Float64 = 0.02
@@ -53,72 +52,92 @@ end
     v0::Float64 = 0.501
 end
 
-function arcsinh_mapping(ξ, V_0, V_min, V_max, M, γ) # this is what Lo and Skindilias used
-    c1 = asinh((V_min - V_0)/γ)
-    c2 = asinh((V_max - V_0)/γ)
-    return V_0 .+ γ * sinh.(c1 .+ ξ * (c2 - c1))
+#############
+# Mapping Functions
+#############
+
+"""
+    arcsinh_mapping(ξ, V₀, V_min, V_max, M, γ)
+
+Maps a grid `ξ` in [0,1] to variance levels using the arcsinh transformation.
+"""
+function arcsinh_mapping(ξ, V₀, V_min, V_max, M, γ)
+    c1 = asinh((V_min - V₀) / γ)
+    c2 = asinh((V_max - V₀) / γ)
+    return V₀ .+ γ * sinh.(c1 .+ ξ * (c2 - c1))
 end
 
-function linear_mapping(ξ, V_0, V_min, V_max, M, γ) # this is what we use
+"""
+    linear_mapping(ξ, V₀, V_min, V_max, M, γ)
+
+A simple linear mapping from [0,1] to [V_min,V_max].
+"""
+function linear_mapping(ξ, V₀, V_min, V_max, M, γ)
     return V_min .+ ξ * (V_max - V_min)
 end
 
-function construct_variance_levels(V_min, V_max, M, mapping_function, v_0; γ = 5)
+"""
+    construct_variance_levels(V_min, V_max, M, mapping_function, V₀; γ=5)
+
+Constructs a grid of variance levels.
+"""
+function construct_variance_levels(V_min, V_max, M, mapping_function, V₀; γ=5)
     ξ = range(0.0, 1.0, length=M)
-    V_levels = mapping_function(ξ, v_0, V_min, V_max, M, γ)
-    return V_levels
+    return mapping_function(ξ, V₀, V_min, V_max, M, γ)
 end
 
-function construct_asset_price_levels(S_min, S_max, N, mapping_function, S_0; γ = 5)
+"""
+    construct_asset_price_levels(S_min, S_max, N, mapping_function, S₀; γ=5)
+
+Constructs a grid of asset price levels.
+"""
+function construct_asset_price_levels(S_min, S_max, N, mapping_function, S₀; γ=5)
     ξ = range(0.0, 1.0, length=N)
-    S_levels = mapping_function(ξ, S_0, S_min, S_max, N, γ)
-    return S_levels
+    return mapping_function(ξ, S₀, S_min, S_max, N, γ)
 end
 
+#############
+# Simulation Functions
+#############
 
-function simulate_variance_process(Q, V_levels, V0, T)
+"""
+    simulate_variance_process(Q, V_levels, V₀, T)
+
+Simulates the variance process over time using a CTMC with generator matrix `Q`.
+"""
+function simulate_variance_process(Q, V_levels, V₀, T)
     M = length(V_levels)
-    idx_v = findmin(abs.(V_levels .- V0))[2]
-    V0 = V_levels[idx_v]  # Adjust V0 to the nearest grid point
+    idx_v = findmin(abs.(V_levels .- V₀))[2]
+    V_adj = V_levels[idx_v]  # Adjust V₀ to nearest grid point
 
-    # Initialize time and state variables
     t = 0.0
     times = [0.0]
-    V_path = [V0]
+    V_path = [V_adj]
     idx_v_path = [idx_v]
 
     while t < T
-        rate = -1/Q[idx_v, idx_v]
-        if rate <= 0
-            τ = T - t  # Stay in current state until T
+        rate = -1 / Q[idx_v, idx_v]
+        τ = rate <= 0 ? (T - t) : rand(Exponential(rate))
+        t += τ
+        if t > T
             t = T
-        else
-            τ = rand(Exponential(rate))
-            print("τ: ", τ)
-            t = t + τ
-            if t > T
-                t = T  # Adjust if time exceeds T
-                times = [times; t]
-                V_path = [V_path; V_levels[idx_v]]
-                idx_v_path = [idx_v_path; idx_v]
-                break
-            end
+            push!(times, t)
+            push!(V_path, V_levels[idx_v])
+            push!(idx_v_path, idx_v)
+            break
         end
 
-        times = [times; t]
-        V_path = [V_path; V_levels[idx_v]]
-        idx_v_path = [idx_v_path; idx_v]
+        push!(times, t)
+        push!(V_path, V_levels[idx_v])
+        push!(idx_v_path, idx_v)
 
-        # Transition to next state
-        probs = Q[idx_v, :]
-        probs[idx_v] = 0.0  # Exclude current state
+        # Transition step
+        probs = copy(Q[idx_v, :])
+        probs[idx_v] = 0.0
         total_rate = sum(probs)
         if total_rate > 0
             probs = probs / total_rate
             idx_v = sample(1:M, Weights(probs))
-        else
-            # If no transitions are possible, stay in current state
-            pass
         end
     end
 
@@ -126,119 +145,174 @@ function simulate_variance_process(Q, V_levels, V0, T)
 end
 
 """
-The double operations approximation constructs the generator matrix Q for the CTMC approximation
-for the joint asset price and variance process. It contains both the double births and double deaths
-along with the transfer rates between asset price and variance levels. 
+    simulate_asset_price(S₀, times, V_path, μ, ρ)
 
-Consider the following class of models: 
-$$
-    d \begin{pmatrix} S_t \\ V_t \end{pmatrix} = \begin{pmatrix} b_1(S_t, V_t) \\ b_2(V_t) \end{pmatrix} dt + \begin{pmatrix} \sigma_{11}(S_t, V_t) & \sigma_{12}(S_t, V_t) \\ 0 & \sigma_{22}(V_t) \end{pmatrix} d \begin{pmatrix} B_t \\ \beta_t \end{pmatrix}
-$$
-
-Then the generator matrix Q is constructed as follows: 
-$$
-a_{1,0}^N &= N b_1^+\left(\frac{\ell}{N}\right) + \frac{N^2}{2} \left(\sigma_{11}^2\left(\frac{\ell}{N}\right) + \sigma_{12}^2\left(\frac{\ell}{N}\right) - |\sigma_{12}\left(\frac{\ell}{N}\right)| \sigma_{22}\left(\frac{\ell}{N}\right)\right), \\
-a_{0,1}^N &= N b_2^+\left(\frac{\ell}{N}\right) + \frac{N^2}{2} \left(\sigma_{22}^2\left(\frac{\ell}{N}\right) - |\sigma_{12}\left(\frac{\ell}{N}\right)| \sigma_{22}\left(\frac{\ell}{N}\right)\right), \\
-s_{1,0}^N &= N b_1^-\left(\frac{\ell}{N}\right) + \frac{N^2}{2} \left(\sigma_{11}^2\left(\frac{\ell}{N}\right) + \sigma_{12}^2\left(\frac{\ell}{N}\right) - |\sigma_{12}\left(\frac{\ell}{N}\right)| \sigma_{22}\left(\frac{\ell}{N}\right)\right), \\
-s_{0,1}^N &= N b_2^-\left(\frac{\ell}{N}\right) + \frac{N^2}{2} \left(\sigma_{22}^2\left(\frac{\ell}{N}\right) - |\sigma_{12}\left(\frac{\ell}{N}\right)| \sigma_{22}\left(\frac{\ell}{N}\right)\right).
-$$
-
-Where a_{1, 0} is the transition from S_t \to S_t + \ell and a_{0, 1} is the transition from V_t \to V_t + \ell.
-and s_{1, 0} is the transition from S_t \to S_t - \ell and s_{0, 1} is the transition from V_t \to V_t - \ell.
-
-
-Simultaneous transitions between price and volatility are given by:
-$$
-    a_{1,1}^N &= s_{1,1}^N = \frac{N^2}{2} \sigma_{12}^+\left(\frac{l}{N}\right) \sigma_{22}\left(\frac{l}{N}\right), \\
-    t_{1 \to 2}^N &= t_{2 \to 1}^N = \frac{N^2}{2} \sigma_{12}^-\left(\frac{l}{N}\right) \sigma_{22}\left(\frac{l}{N}\right).
-$$
-where \( a_{1, 1}^N \) is the transition for (S_t, V_t) \to (S_t + \ell, V_t + \ell), \( s_{1, 1}^N \) is the transition for (S_t, V_t) \to (S_t - \ell, V_t - \ell), \( t_{1 \to 2}^N \) is the transition for (S_t, V_t) \to (S_t + \ell, V_t - \ell), and \( t_{2 \to 1}^N \) is the transition for (S_t, V_t) \to (S_t - \ell, V_t + \ell).
+Simulates the asset price process over time. The function uses the Cholesky
+decomposition to incorporate the correlation `ρ` between the Brownian drivers.
 """
+function simulate_asset_price(S₀, times, V_path, μ, ρ)
+    L = [1.0 0.0; ρ sqrt(1 - ρ^2)]
+    S = [S₀]
+    times_asset = [times[1]]
+    for i in 1:(length(times)-1)
+        Δt = times[i+1] - times[i]
+        v_current = V_path[i]
+        drift = (μ - 0.5 * v_current) * Δt
+        # Generate a correlated Brownian increment for the asset
+        Z = L * randn(2)
+        diffusion = sqrt(v_current) * sqrt(Δt) * Z[1]
+        S_new = S[end] * exp(drift + diffusion)
+        push!(S, S_new)
+        push!(times_asset, times[i+1])
+    end
+    return times_asset, S
+end
 
-heston_b1(S, V; params = heston_params) = params.μ_h * S
-heston_b2(V; params = heston_params) = params.ν_h * (params.θ_h - V)
-heston_σ_11(S, V; params = heston_params) = sqrt(1 - params.ρ^2) * sqrt(V) * S
-heston_σ_12(S, V; params = heston_params) = params.ρ * sqrt(V) * S
-heston_σ_22(V; params = heston_params) = params.κ_h * sqrt(V)
+"""
+    compute_transition_matrix(Q, T)
 
-b1_SABR(S, V; params = SABR_params) = 0
-b2_SABR(V; params = SABR_params) = 0
-σ11_SABR(S, V; params = SABR_params) = sqrt(1 - params.ρ^2) * sqrt(V) * S^params.β
-σ12_SABR(S, V; params = SABR_params) = params.ρ * V * S^params.β
-σ22_SABR(V; params = SABR_params) = params.κ_s * V
+Computes the transition probability matrix using the matrix exponential.
+"""
+function compute_transition_matrix(Q, T)
+    return fastExpm(Q * T)
+end
 
-# since 3/2 model is similar to heston model, we can use the same functions
-b1_32(S, V; params = threetwo_params) = params.μ_32 * S
-b2_32(V; params = threetwo_params) = params.ν_32 * (params.θ_32 - V^2)
-σ11_32(S, V; params = threetwo_params) = sqrt(1 - params.ρ^2) * sqrt(V) * S
-σ12_32(S, V; params = threetwo_params) = params.ρ * sqrt(V) * S
-σ22_32(V; params = threetwo_params) = params.κ_32 * V^(3/2)
+#############
+# Generator Matrix Construction
+#############
 
-pos(x) = max(x, 0)
-neg(x) = max(-x, 0)
+"""
+    transition_rates(S, V, N; b1, b2, sigma11, sigma12, sigma22)
 
-function transition_rates(S, V, N)
-    a10 = N * pos(b1(S, V)) + (N^2 / 2) * (sigma11(S, V)^2 + sigma12(S, V)^2 - abs(sigma12(S, V)) * sigma22(V))
-    s10 = N * neg(b1(S, V)) + (N^2 / 2) * (sigma11(S, V)^2 + sigma12(S, V)^2 - abs(sigma12(S, V)) * sigma22(V))
-    a01 = N * pos(b2(V)) + (N^2 / 2) * (sigma22(V)^2 - abs(sigma12(S, V)) * sigma22(V))
-    s01 = N * neg(b2(V)) + (N^2 / 2) * (sigma22(V)^2 - abs(sigma12(S, V)) * sigma22(V))
-    a11 = s11 = (N^2 / 2) * pos(sigma12(S, V)) * sigma22(V)
-    t12 = t21 = (N^2 / 2) * neg(sigma12(S, V)) * sigma22(V)
+Computes the transition rates for the joint asset price and variance process.
+The functions `b1`, `b2`, `sigma11`, `sigma12`, and `sigma22` should be provided
+by the user (or by a wrapper that specifies a particular model).
+"""
+function transition_rates_dd(S, V, N; b1, b2, sigma11, sigma12, sigma22) # Only works with linear mappings for now
+    a10 = N * max(b1(S, V), 0) + (N^2 / 2) * (sigma11(S, V)^2 + sigma12(S, V)^2 - abs(sigma12(S, V)) * sigma22(S, V))
+    s10 = N * max(-b1(S, V), 0) + (N^2 / 2) * (sigma11(S, V)^2 + sigma12(S, V)^2 - abs(sigma12(S, V)) * sigma22(S, V))
+    a01 = N * max(b2(V), 0) + (N^2 / 2) * (sigma22(S, V)^2 - abs(sigma12(S, V)) * sigma22(S, V))
+    s01 = N * max(-b2(V), 0) + (N^2 / 2) * (sigma22(S, V)^2 - abs(sigma12(S, V)) * sigma22(S, V))
+    a11 = s11 = (N^2 / 2) * max(sigma12(S, V), 0) * sigma22(S, V)
+    t12 = t21 = (N^2 / 2) * max(-sigma12(S, V), 0) * sigma22(S, V)
     return (a10, s10, a01, s01, a11, s11, t12, t21)
 end
 
-# Construct Q matrix functionally
-function construct_Q(N, ℓ)
-    Q = spzeros(N*N, N*N)
+function transition_rates_reduced(S, V, N; b1, b2, sigma11, sigma12, sigma22)
+    a10 = N * max(b1(S, V), 0) + (N^2 / 2) * (sigma11(S, V)^2 + sigma12(S, V)^2 - abs(sigma12(S, V)) * sigma22(S, V))
+    s10 = N * max(-b1(S, V), 0) + (N^2 / 2) * (sigma11(S, V)^2 + sigma12(S, V)^2)
+    a01 = N * max(b2(V), 0) + (N^2 / 2) * (sigma22(S, V)^2 - 2 * max(sigma12(S, V), 0) * sigma22(S, V))
+    s01 = N * max(-b2(V), 0) + (N^2 / 2) * (sigma22(S, V)^2 - 2 * max(-sigma12(S, V), 0) * sigma22(S, V))
+    a11 = (N^2) * max(sigma12(S, V), 0) * sigma22(S, V)
+    t21 = (N^2) * max(-sigma12(S, V), 0) * sigma22(S, V)
+    t12 = s11 = 0.0
+    return (a10, s10, a01, s01, a11, s11, t12, t21)
+end
+"""
+    construct_Q(N, ℓ; b1, b2, sigma11, sigma12, sigma22)
+
+Constructs the generator matrix Q for the CTMC approximation over a grid of
+N asset price levels and N variance levels. The step size is given by ℓ.
+"""
+function construct_Q(N, ℓ; b1, b2, sigma11, sigma12, sigma22, reduced=false)
+    Q = spzeros(N * N, N * N)
     for i in 1:N, j in 1:N
         idx = (i - 1) * N + j
-        S, V = i * ℓ, j * ℓ
-        a10, s10, a01, s01, a11, s11, t12, t21 = transition_rates(S, V, N)
-        
-        if i < N Q[idx, idx + N] = a10 end
-        if i > 1 Q[idx, idx - N] = s10 end
-        if j < N Q[idx, idx + 1] = a01 end
-        if j > 1 Q[idx, idx - 1] = s01 end
-        if i < N && j < N Q[idx, idx + N + 1] = a11 end
-        if i > 1 && j > 1 Q[idx, idx - N - 1] = s11 end
-        if i < N && j > 1 Q[idx, idx + N - 1] = t12 end
-        if i > 1 && j < N Q[idx, idx - N + 1] = t21 end
+        S = i * ℓ
+        V = j * ℓ
+        if reduced==false
+            a10, s10, a01, s01, a11, s11, t12, t21 = transition_rates_dd(S, V, N;
+                b1=b1, b2=b2, sigma11=sigma11, sigma12=sigma12, sigma22=sigma22)
+        else
+            a10, s10, a01, s01, a11, s11, t12, t21 = transition_rates_reduced(S, V, N;
+                b1=b1, b2=b2, sigma11=sigma11, sigma12=sigma12, sigma22=sigma22)
+        end
+        if i < N
+            Q[idx, idx + N] = a01
+        end
+        if i > 1
+            Q[idx, idx - N] = s01
+        end
+        if j < N
+            Q[idx, idx + 1] = a10
+        end
+        if j > 1
+            Q[idx, idx - 1] = s10
+        end
+        if i < N && j < N
+            Q[idx, idx + N + 1] = a11
+        end
+        if i > 1 && j > 1
+            Q[idx, idx - N - 1] = s11
+        end
+        if i < N && j > 1
+            Q[idx, idx + N - 1] = t12
+        end
+        if i > 1 && j < N
+            Q[idx, idx - N + 1] = t21
+        end
         Q[idx, idx] = -sum(Q[idx, :])
     end
     return Q
 end
 
-
 """
-Main function to simulate Heston model paths using CTMC approximation with general generator matrix.
+    construct_generator_matrix_general(V_levels, κ, θ, σ)
 
-# Arguments
-- `S0::Float64`: Initial stock price.
-- `V0::Float64`: Initial variance.
-- `params::Dict`: Dictionary of model parameters.
-- `T::Float64`: Time horizon.
-- `M::Int`: Number of variance levels (states).
-- `mapping_function::Function`: Function that defines the mapping from [0,1] to [0,1].
-
-# Returns
-- `times_asset::Vector{Float64}`: Times of the asset price process.
-- `S::Vector{Float64}`: Asset prices over time.
-- `V_path::Vector{Float64}`: Variance levels over time.
-- `times_variance::Vector{Float64}`: Times of the variance process.
+A dummy implementation to construct a generator matrix for the variance process.
+Replace this with your actual method.
 """
-
-function compute_transition_matrix(Q, T)
-    # P = exp(Q * T)
-    P = fastExpm(Q * T)  # Matrix exponential
-    return P
+function construct_generator_matrix_general(V_levels, κ, θ, σ)
+    M = length(V_levels)
+    Q = spzeros(M, M)
+    # For illustration: a simple tridiagonal generator matrix
+    for i in 2:(M - 1)
+        Q[i, i - 1] = κ
+        Q[i, i + 1] = κ
+        Q[i, i] = -2 * κ
+    end
+    Q[1, 2] = κ
+    Q[1, 1] = -κ
+    Q[M, M - 1] = κ
+    Q[M, M] = -κ
+    return Q, V_levels
 end
 
+"""
+    construct_combined_generator_matrix(V_levels, S_levels, params)
+
+A dummy implementation that constructs the combined generator matrix for the joint
+asset price and variance process. Replace with your proper implementation.
+"""
+function construct_combined_generator_matrix(V_levels, S_levels, params)
+    M = length(V_levels)
+    N = length(S_levels)
+    total_states = M * N
+    Q = spzeros(total_states, total_states)
+    # Simple dummy construction: set off-diagonals to 1 and diagonal so that each row sums to zero.
+    for i in 1:total_states
+        Q[i, i] = -1.0
+        if i < total_states
+            Q[i, i + 1] = 1.0
+        end
+    end
+    return Q, V_levels, S_levels
+end
+
+#############
+# Option Pricing Functions
+#############
+
+"""
+    construct_payoff_vector(V_levels, S_levels, Strike, option_type)
+
+Constructs a payoff vector over the grid for a European call or put option.
+"""
 function construct_payoff_vector(V_levels, S_levels, Strike, option_type)
     M = length(V_levels)
     N = length(S_levels)
     total_states = M * N
     G = zeros(total_states)
-
     for vi in 1:M
         for si in 1:N
             state_idx = (vi - 1) * N + si
@@ -255,172 +329,121 @@ function construct_payoff_vector(V_levels, S_levels, Strike, option_type)
     return G
 end
 
-function simulate_heston_ctmc_general(S0, V0, params::Dict, T, M, mapping_function)
-    # Unpack parameters
-    mu = params["mu"]
-    kappa = params["kappa"]
-    theta = params["theta"]
-    sigma = params["sigma"]
-    rho = params["rho"]
+"""
+    price_european_option_exponentiation(S₀, V₀, params, T, M, N, mapping_function_S, mapping_function_V, K, option_type; risk_free_rate=0.05)
 
-    # Define V_min and V_max
-    V_min = max(0.0001, theta - 5 * sigma * sqrt(theta) / sqrt(2 * kappa))
-    V_max = theta + 5 * sigma * sqrt(theta) / sqrt(2 * kappa)
-
-    # Construct variance levels using the provided mapping function
-    V_levels = construct_variance_levels(V_min, V_max, M, mapping_function, V0)
-
-    # Construct generator matrix with general format
-    Q, V_levels_adjusted = construct_generator_matrix_general(V_levels, kappa, theta, sigma)
-
-    # Simulate variance process
-    times_variance, V_path, idx_v_path = simulate_variance_process(Q, V_levels_adjusted, V0, T)
-
-    # Simulate asset price process
-    println("Time steps for variance process: ", times_variance)
-    times_asset, S = simulate_asset_price(S0, times_variance, V_path, mu, rho)
-
-    return times_asset, S, V_path, times_variance
-end
-
-function simulate_asset_price(S0, times, V_path, mu, rho)
-    # Precompute Cholesky decomposition for correlation
-    L = [1.0 0.0; rho sqrt(1 - rho^2)]
-
-    S = [S0]
-    times_asset = [times[1]]
-
-    for i in 1:length(times)-1
-        t_current = times[i]
-        t_next = times[i+1]
-        Δt = t_next - t_current
-        v_current = V_path[i]
-        sqrt_v_current = sqrt(v_current)
-
-        # Simulate asset price increment
-        Z = randn(2)
-        Z = L * Z
-        dW_S = sqrt(Δt) * Z[1]
-        drift = (mu - 0.5 * v_current) * Δt
-        diffusion = sqrt_v_current * dW_S
-        S_new = S[end] * exp(drift + diffusion)
-
-        # Append results
-        S = [S; S_new]
-        times_asset = [times_asset; t_next]
-    end
-
-    return times_asset, S
-end
-
-function price_european_option_exponentiation(S0, V0, params::Dict, T, M, N, mapping_function_S, mapping_function_V, K, option_type; risk_free_rate=0.05)
-    # Unpack parameters
+Prices a European option using the matrix exponentiation approach.
+"""
+function price_european_option_double_death(S_0, V_0, T, Q, variance_grid_size, asset_grid_size, strike_price, option_type, params::HestonParams; risk_free_rate=0.05)
     r = risk_free_rate
-    # Construct variance levels and asset price levels
-    V_min = max(0.0, params["theta"] - 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"]))
-    V_max = params["theta"] + 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"])
-    V_levels = construct_variance_levels(V_min, V_max, M, mapping_function_V, V0)
+    V_min = max(0.0, params.θ_h - 3 * params.ν * sqrt(params.θ_h) / sqrt(2 * params.κ_h)) # Lower bound for variance
+    V_max = params.θ_h + 3 * params.ν * sqrt(params.θ_h) / sqrt(2 * params.κ_h) # Upper bound for variance
+    V_levels = construct_variance_levels(V_min, V_max, variance_grid_size, linear_mapping, V_0)
 
-    S_min = S0 * 0.5  # Set based on expected range of asset prices
-    S_max = S0 * 1.5
-    S_levels = construct_asset_price_levels(S_min, S_max, N, mapping_function_S, S0)
+    S_min = S_0 * 0.1
+    S_max = S_0 * 5.0
+    S_levels = construct_asset_price_levels(S_min, S_max, asset_grid_size, linear_mapping, S_0)
 
-    # Construct the combined generator matrix
-    Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
+    # Use the double death approximation to construct the generator matrix
+    # Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
+    
+    P = compute_transition_matrix(Q, T)
+    G = construct_payoff_vector(V_levels, S_levels, strike_price, option_type)
+    # @test size(G) == (variance_grid_size * asset_grid_size,)
+    idx_V0 = findmin(abs.(V_levels .- V_0))[2]
+    idx_S0 = findmin(abs.(S_levels .- S_0))[2]
+    initial_state = (idx_V0 - 1) * asset_grid_size + idx_S0
+    
+    # return P, G
+    initial_distribution = zeros(length(G))
+    initial_distribution[initial_state] = 1.0
 
-    # Compute the transition probability matrix
-    @time P = compute_transition_matrix(Q, T)
-
-    # Construct the payoff vector
-    G = construct_payoff_vector(V_levels, S_levels, K, option_type)
-    println("Payoff vector: ", G)
-
-    # Define initial state
-    # Find the indices closest to initial V0 and S0
-    idx_V0 = findmin(abs.(V_levels .- V0))[2]
-    idx_S0 = findmin(abs.(S_levels .- S0))[2]
-    initial_state = (idx_V0 - 1) * N + idx_S0
-
-    # Initial distribution vector
-    π0 = zeros(length(G))
-    π0[initial_state] = 1.0
-
-    # Compute the option price
-
-    option_price = exp(-r * T) * (π0'*P*G)[1]
-
+    option_price = exp(-r * T) * (initial_distribution' * P * G)[1]
     return option_price
 end
 
-function European_call_price_krylov(S0, V0, params::Dict, T, M, N, mapping_function_S, mapping_function_V, K, option_type; risk_free_rate=0.0)
-    # Unpack parameters
+function price_european_option_exponentiation(S₀, V₀, params::HestonParams, T, M, N, mapping_function_S, mapping_function_V, K, option_type; risk_free_rate=0.05)
     r = risk_free_rate
-    # Construct variance levels and asset price levels
     V_min = max(0.0, params["theta"] - 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"]))
     V_max = params["theta"] + 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"])
-    V_levels = construct_variance_levels(V_min, V_max, M, mapping_function_V, V0)
+    V_levels = construct_variance_levels(V_min, V_max, M, mapping_function_V, V₀)
 
-    S_min = S0 * 0.5  # Set based on expected range of asset prices
-    S_max = S0 * 1.5
-    S_levels = construct_asset_price_levels(S_min, S_max, N, mapping_function_S, S0)
+    S_min = S₀ * 0.5
+    S_max = S₀ * 1.5
+    S_levels = construct_asset_price_levels(S_min, S_max, N, mapping_function_S, S₀)
 
-    # Construct the combined generator matrix
     Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
-
-    # Compute the transition probability matrix
-    @time P = compute_transition_matrix(Q, T)
-
-    # Construct the payoff vector
+    P = compute_transition_matrix(Q, T)
     G = construct_payoff_vector(V_levels, S_levels, K, option_type)
-    println("Payoff vector: ", G)
 
-    # Define initial state
-    # Find the indices closest to initial V0 and S0
-    idx_V0 = findmin(abs.(V_levels .- V0))[2]
-    idx_S0 = findmin(abs.(S_levels .- S0))[2]
+    idx_V0 = findmin(abs.(V_levels .- V₀))[2]
+    idx_S0 = findmin(abs.(S_levels .- S₀))[2]
     initial_state = (idx_V0 - 1) * N + idx_S0
+    π₀ = zeros(length(G))
+    π₀[initial_state] = 1.0
 
-    # Initial distribution vector
-    π0 = zeros(length(G))
-    π0[initial_state] = 1.0
+    option_price = exp(-r * T) * (π₀' * P * G)[1]
+    return option_price
+end
 
-    # Compute the option price
-    # option_price = exp(-r * T) * (π0'*P*G)[1]
-    # Compute w_tilde = exp(Q^T t) * v
+"""
+    European_call_price_krylov(S₀, V₀, params, T, M, N, mapping_function_S, mapping_function_V, K, option_type; risk_free_rate=0.0)
+
+Prices a European call option using a Krylov subspace method.
+"""
+function European_call_price_krylov(S_0, V_0, T, Q, variance_grid_size, asset_grid_size, strike_price, option_type, params::HestonParams; risk_free_rate=0.0)
+    r = risk_free_rate
+    V_min = max(0.0, params.θ_h - 3 * params.ν * sqrt(params.θ_h) / sqrt(2 * params.κ_h)) # Lower bound for variance
+    V_max = params.θ_h + 3 * params.ν * sqrt(params.θ_h) / sqrt(2 * params.κ_h) # Upper bound for variance
+    V_levels = construct_variance_levels(V_min, V_max, variance_grid_size, linear_mapping, V_0)
+
+    S_min = S_0 * 0.1
+    S_max = S_0 * 5.0
+    S_levels = construct_asset_price_levels(S_min, S_max, asset_grid_size, linear_mapping, S_0)
+
+    # Use the double death approximation to construct the generator matrix
+    # Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
+    
+    # P = compute_transition_matrix(Q, T)
+    G = construct_payoff_vector(V_levels, S_levels, strike_price, option_type)
+    # @test size(G) == (variance_grid_size * asset_grid_size,)
+    idx_V0 = findmin(abs.(V_levels .- V_0))[2]
+    idx_S0 = findmin(abs.(S_levels .- S_0))[2]
+    initial_state = (idx_V0 - 1) * asset_grid_size + idx_S0
+    
+    # return P, G
+    π₀ = zeros(length(G))
+    π₀[initial_state] = 1.0
+
     Q_transpose = transpose(Q)
-
-    w_tilde = expmv(T, Q_transpose, π0; tol = 1e-6, m = 20)
+    w_tilde = expmv(T, Q_transpose, π₀; tol=1e-6, m=20)
     option_price = exp(-r * T) * dot(w_tilde, G)
-    println("w_tilde: ")
-
     return option_price
 end
-# The rest of the functions remain the same:
-# - construct_variance_levels
-# - simulate_variance_process
-# - simulate_asset_price
 
-# Example mapping functions (as before)
-# ...
+"""
+    compute_transition_matrices(Q, Δt_array)
 
-
-
-# fast matrix exponentiation for tridiagonal such that row sum is zero
+Computes a list of transition matrices corresponding to each time step in Δt_array.
+"""
 function compute_transition_matrices(Q, Δt_array)
     P_matrices = []
     for Δt in Δt_array
-        P = fastExpm(Q * Δt)
-        push!(P_matrices, P)
+        push!(P_matrices, fastExpm(Q * Δt))
     end
     return P_matrices
 end
 
+"""
+    initialize_option_values(V_levels, S_levels, K, option_type)
+
+Initializes the option payoff vector at maturity.
+"""
 function initialize_option_values(V_levels, S_levels, K, option_type)
     M = length(V_levels)
     N = length(S_levels)
     total_states = M * N
     V_option = zeros(total_states)
-
     for vi in 1:M
         for si in 1:N
             state_idx = (vi - 1) * N + si
@@ -437,18 +460,18 @@ function initialize_option_values(V_levels, S_levels, K, option_type)
     return V_option
 end
 
+"""
+    backward_induction(P_matrices, V_option, V_levels, S_levels, K, option_type, r, Δt_array)
 
+Performs backward induction over the monitoring times for pricing an American option.
+"""
 function backward_induction(P_matrices, V_option, V_levels, S_levels, K, option_type, r, Δt_array)
     M = length(V_levels)
     N = length(S_levels)
     total_states = M * N
-    N_steps = length(P_matrices)
-
-    for n in N_steps:-1:1
+    for n in length(P_matrices):-1:1
         P = P_matrices[n]
-        # Expected continuation value
         continuation_value = real.(P * V_option)
-        # Immediate exercise value
         exercise_value = zeros(total_states)
         for state_idx in 1:total_states
             si = (state_idx - 1) % N + 1
@@ -459,90 +482,44 @@ function backward_induction(P_matrices, V_option, V_levels, S_levels, K, option_
                 exercise_value[state_idx] = max(K - S_i, 0.0)
             end
         end
-        # Discount continuation value
         continuation_value *= exp(-r * Δt_array[n])
-        # Update option value
         V_option = max.(exercise_value, continuation_value)
     end
     return V_option
 end
 
-function price_american_option_ctmc(S0, V0, params::Dict, T, M, N, mapping_function_S, mapping_function_V, K, option_type, monitoring_times)
-    # Unpack parameters
+"""
+    price_american_option_ctmc(S₀, V₀, params, T, M, N, mapping_function_S, mapping_function_V, K, option_type, monitoring_times)
+
+Prices an American option using CTMC backward induction.
+"""
+function price_american_option_ctmc(S₀, V₀, params::Dict, T, M, N, mapping_function_S, mapping_function_V, K, option_type, monitoring_times)
     r = params["r"]
 
-    # Construct variance levels and asset price levels
     V_min = max(0.0, params["theta"] - 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"]))
     V_max = params["theta"] + 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"])
-    V_levels = construct_variance_levels(V_min, V_max, M, mapping_function_V, V0)
+    V_levels = construct_variance_levels(V_min, V_max, M, mapping_function_V, V₀)
 
-    S_min = S0 * 0.02  # Adjust as needed
-    S_max = S0 * 2.5
-    S_levels = construct_asset_price_levels(S_min, S_max, N, mapping_function_S, S0)
+    S_min = S₀ * 0.02
+    S_max = S₀ * 2.5
+    S_levels = construct_asset_price_levels(S_min, S_max, N, mapping_function_S, S₀)
 
-    println("Constructed asset and variance levels:", S_levels, V_levels)
-    # Construct the combined generator matrix
     Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
-    println("Constructed combined generator matrix")
-
-    # Compute time intervals
     Δt_array = diff(monitoring_times)
-
-    # Compute transition matrices
     P_matrices = compute_transition_matrices(Q, Δt_array)
-    println("Computed transition matrices")
-    # Initialize option values at maturity
     V_option = initialize_option_values(V_levels, S_levels, K, option_type)
-    println("Initialized option values at maturity")
-    # Perform backward induction
     V_option = backward_induction(P_matrices, V_option, V_levels, S_levels, K, option_type, r, Δt_array)
 
-    # Find the initial state index
-    idx_V0 = findmin(abs.(V_levels .- V0))[2]
-    idx_S0 = findmin(abs.(S_levels .- S0))[2]
+    idx_V0 = findmin(abs.(V_levels .- V₀))[2]
+    idx_S0 = findmin(abs.(S_levels .- S₀))[2]
     initial_state = (idx_V0 - 1) * N + idx_S0
 
-    # Option price is the option value at the initial state
     option_price = V_option[initial_state]
-
     return option_price
 end
 
-# Example usage
-# S0 = 10.0         # Initial stock price
-# V0 = 0.04    
-# # S0 = 10, v0 = 0.04, T = 1, K = 4, ρ = −0.75, σv = 0.15, η = 4, θ = 0.035, r = 0      # Initial variance
-# params = Dict(
-#     "r" => 0.0,        # Risk-free rate
-#     "mu" => 0.05,        # Expected return
-#     "kappa" => 4,      # Mean reversion rate
-#     "theta" => 0.035,     # Long-term variance
-#     "sigma" => 0.15,      # Volatility of variance
-#     "rho" => -0.75        # Correlation between asset and variance
-# )
-# T = 1.0          # Time horizon (in years)
-# M = 20 # Number of variance levels (states)
-# N = 20        # Number of asset price levels (states)
-# # Choose the mapping function
-# mapping_function_S = arcsinh_mapping
-# mapping_function_V = arcsinh_mapping # or any other mapping function
+end  # module CTMCModels
 
+using .DoubleDeathApproximation
 
-# # Simulate the Heston model65
-# Strike = 4.0
-# times_asset, S, V_path, times_variance = simulate_heston_ctmc_general(S0, V0, params, T, M, mapping_function_V)
-
-# plot(times_asset, S, label="Asset Price", xlabel="Time", ylabel="Price", legend=:topleft)
-# # plot!(times_variance, V_path, label="Variance", xlabel="Time", ylabel="Variance", legend=:topleft)
-# plot(times_variance, V_path, label="Variance", xlabel="Time", ylabel="Variance", legend=:topleft)
-
-# # European_call_price = price_european_option_exponentiation(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call", risk_free_rate=0.0)
-# European_call_price = European_call_price_krylov(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call"; risk_free_rate=0.0)
-
-# monitoring_times = collect(0.0:0.05:T)
-
-# # Price the American option
-# option_price = price_american_option_ctmc(S0, V0, params, T, M, N, linear_mapping, linear_mapping, Strike, "call", monitoring_times)
-
-# println("American Call option price using CTMC: $option_price")
-
+# Dummy data for testing

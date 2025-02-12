@@ -395,19 +395,19 @@ function price_european_option_exponentiation(S0, V0, params::Dict, T, M, N, map
     V_max = params["theta"] + 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"])
     V_levels = construct_variance_levels(V_min, V_max, M, mapping_function_V, V0)
 
-    S_min = S0 * 0.5  # Set based on expected range of asset prices
-    S_max = S0 * 1.5
+    S_min = S0 * 0.02  # Set based on expected range of asset prices
+    S_max = S0 * 5.0
     S_levels = construct_asset_price_levels(S_min, S_max, N, mapping_function_S, S0)
 
     # Construct the combined generator matrix
     Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
 
     # Compute the transition probability matrix
-    @time P = compute_transition_matrix(Q, T)
+    P = compute_transition_matrix(Q, T)
 
     # Construct the payoff vector
     G = construct_payoff_vector(V_levels, S_levels, K, option_type)
-    println("Payoff vector: ", G)
+
 
     # Define initial state
     # Find the indices closest to initial V0 and S0
@@ -434,15 +434,15 @@ function European_call_price_krylov(S0, V0, params::Dict, T, M, N, mapping_funct
     V_max = params["theta"] + 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"])
     V_levels = construct_variance_levels(V_min, V_max, M, mapping_function_V, V0)
 
-    S_min = S0 * 0.5  # Set based on expected range of asset prices
-    S_max = S0 * 1.5
+    S_min = S0 * 0.02  # Set based on expected range of asset prices
+    S_max = S0 * 5.0
     S_levels = construct_asset_price_levels(S_min, S_max, N, mapping_function_S, S0)
 
     # Construct the combined generator matrix
     Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
 
     # Compute the transition probability matrix
-    @time P = compute_transition_matrix(Q, T)
+    # @time P = compute_transition_matrix(Q, T)
 
     # Construct the payoff vector
     G = construct_payoff_vector(V_levels, S_levels, K, option_type)
@@ -463,12 +463,14 @@ function European_call_price_krylov(S0, V0, params::Dict, T, M, N, mapping_funct
     # Compute w_tilde = exp(Q^T t) * v
     Q_transpose = transpose(Q)
 
-    w_tilde = expmv(T, Q_transpose, π0; tol = 1e-6, m = 20)
+    w_tilde = expmv(T, Q_transpose, π0; tol = 1e-6, m = 30)
     option_price = exp(-r * T) * dot(w_tilde, G)
     println("w_tilde: ")
 
     return option_price
 end
+
+# European_call_price_krylov(10.0, 0.04, Dict("r" => 0.0, "mu" => 0.05, "kappa" => 4, "theta" => 0.035, "sigma" => 0.15, "rho" => -0.75), 1.0, 50, 50, arcsinh_mapping, arcsinh_mapping, 4.0, "call")
 # The rest of the functions remain the same:
 # - construct_variance_levels
 # - simulate_variance_process
@@ -551,10 +553,10 @@ function price_american_option_ctmc(S0, V0, params::Dict, T, M, N, mapping_funct
     V_levels = construct_variance_levels(V_min, V_max, M, mapping_function_V, V0)
 
     S_min = S0 * 0.02  # Adjust as needed
-    S_max = S0 * 2.5
+    S_max = S0 * 5
     S_levels = construct_asset_price_levels(S_min, S_max, N, mapping_function_S, S0)
 
-    println("Constructed asset and variance levels:", S_levels, V_levels)
+    # println("Constructed asset and variance levels:", S_levels, V_levels)
     # Construct the combined generator matrix
     Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
     println("Constructed combined generator matrix")
@@ -583,35 +585,36 @@ function price_american_option_ctmc(S0, V0, params::Dict, T, M, N, mapping_funct
 end
 
 # Example usage
-# S0 = 10.0         # Initial stock price
-# V0 = 0.04    
-# # S0 = 10, v0 = 0.04, T = 1, K = 4, ρ = −0.75, σv = 0.15, η = 4, θ = 0.035, r = 0      # Initial variance
-# params = Dict(
-#     "r" => 0.0,        # Risk-free rate
-#     "mu" => 0.05,        # Expected return
-#     "kappa" => 4,      # Mean reversion rate
-#     "theta" => 0.035,     # Long-term variance
-#     "sigma" => 0.15,      # Volatility of variance
-#     "rho" => -0.75        # Correlation between asset and variance
-# )
-# T = 1.0          # Time horizon (in years)
-# M = 20 # Number of variance levels (states)
-# N = 20        # Number of asset price levels (states)
-# # Choose the mapping function
+S0 = 10.0         # Initial stock price
+V0 = 0.04    
+# S0 = 10, v0 = 0.04, T = 1, K = 4, ρ = −0.75, σv = 0.15, η = 4, θ = 0.035, r = 0      # Initial variance
+params = Dict(
+    "r" => 0.0,        # Risk-free rate
+    "mu" => 0.0,        # Expected return
+    "kappa" => 4,      # Mean reversion rate
+    "theta" => 0.035,     # Long-term variance
+    "sigma" => 0.15,      # Volatility of variance
+    "rho" => -0.75        # Correlation between asset and variance
+)
+T = 1.0          # Time horizon (in years)
+M = 150 # Number of variance levels (states)
+N = 150       # Number of asset price levels (states)
+# Choose the mapping function
 # mapping_function_S = arcsinh_mapping
 # mapping_function_V = arcsinh_mapping # or any other mapping function
+mapping_function_S = linear_mapping
+mapping_function_V = linear_mapping
 
-
-# # Simulate the Heston model65
-# Strike = 4.0
-# times_asset, S, V_path, times_variance = simulate_heston_ctmc_general(S0, V0, params, T, M, mapping_function_V)
+# Simulate the Heston model65
+Strike = 20.0
+times_asset, S, V_path, times_variance = simulate_heston_ctmc_general(S0, V0, params, T, M, mapping_function_V)
 
 # plot(times_asset, S, label="Asset Price", xlabel="Time", ylabel="Price", legend=:topleft)
-# # plot!(times_variance, V_path, label="Variance", xlabel="Time", ylabel="Variance", legend=:topleft)
+# plot!(times_variance, V_path, label="Variance", xlabel="Time", ylabel="Variance", legend=:topleft)
 # plot(times_variance, V_path, label="Variance", xlabel="Time", ylabel="Variance", legend=:topleft)
 
-# # European_call_price = price_european_option_exponentiation(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call", risk_free_rate=0.0)
-# European_call_price = European_call_price_krylov(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call"; risk_free_rate=0.0)
+# @time European_call_price_normal = price_european_option_exponentiation(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call", risk_free_rate=0.0)
+@time European_call_price = European_call_price_krylov(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call"; risk_free_rate=0.0)
 
 # monitoring_times = collect(0.0:0.05:T)
 
