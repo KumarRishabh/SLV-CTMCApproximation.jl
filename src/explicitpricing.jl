@@ -42,14 +42,76 @@ function birth_death_matrix(λ, μ, n)
 end
 
 # Construct the 1-d generator for the volatility process using the MCAM method provided in the paper by Cui 
-def volatility_generator(ν, ϱ, κ)
+function construct_generator_reflecting(v::Vector{Float64},
+                                        mu::Function,
+                                        sigma::Function)
+    m0 = length(v)
+    Q = zeros(m0, m0)
 
+    # Mesh widths h[i] = v[i+1] - v[i]
+    h = [v[i+1] - v[i] for i in 1:(m0-1)]
 
+    mu_plus(x) = max(mu(x), 0)
+    mu_minus(x) = max(-mu(x), 0)
+
+    # --- Interior points ---
+    for i in 2:(m0-1)
+        hL = h[i-1]  # = v[i] - v[i-1]
+        hR = h[i]    # = v[i+1] - v[i]
+        mp = mu_plus(v[i])
+        mm = mu_minus(v[i])
+        s2 = sigma(v[i])^2
+
+        Q[i, i-1] = mm/hL + (s2 - (hL*mm + hR*mp)) / (hL*(hL + hR))
+        Q[i, i+1] = mp/hR + (s2 - (hL*mm + hR*mp)) / (hR*(hL + hR))
+        Q[i, i] = - (Q[i, i-1] + Q[i, i+1])
+    end
+
+    # --- Left boundary (reflecting at v[1]) ---
+    # One-sided difference for i=1 (no i-1).
+    hR = h[1]             # width from v[1] to v[2]
+    mp = mu_plus(v[1])
+    mm = mu_minus(v[1])
+    s2 = sigma(v[1])^2
+
+    # A simple reflection scheme might say:
+    # outflow from i=1 goes only to i=2, using a one-sided formula:
+    Q[1, 2] = mp/hR + (s2 - (hR*mp)) / (hR^2)
+
+    # Negative drift is "reflected" rather than allowed to go below v[1].
+    # So no Q[1,0].
+    # Then enforce row sum = 0:
+    Q[1, 1] = - Q[1, 2]
+
+    # --- Right boundary (reflecting at v[m0]) ---
+    # One-sided difference for i=m0 (no i+1).
+    hL = h[m0-1]          # width from v[m0-1] to v[m0]
+    mp = mu_plus(v[m0])
+    mm = mu_minus(v[m0])
+    s2 = sigma(v[m0])^2
+
+    Q[m0, m0-1] = mm/hL + (s2 - (hL*mm)) / (hL^2)
+    Q[m0, m0] = - Q[m0, m0-1]
+
+    return Q
 end
 
-function continuation_value(x, strike, payoff, discount_factor)
-    return discount_factor * mean(payoff.(x, strike))
-end
+# -------------- Example usage ---------------
+mu_fun(x) = 0.5 - x
+sigma_fun(x) = 0.2 + 0.1*x
+
+vgrid = range(1e-3, 10.0, length=101) |> collect
+Q = construct_generator_reflecting(vgrid, mu_fun, sigma_fun)
+
+@printf "Q is a %d x %d matrix with row sums ~ zero.\n" size(Q, 1) size(Q, 2)
+
+# Once the generator of the volatility process is constructed, we can use the fokker plank equation to calculate the 
+# V(t, x), which is the value function linked with the price of a European option at time t and stock price x. 
+# The value function V(t, x) satisfies the following PDE:
+# dV/dt = -μ_h * x * dV/dx - 0.5 * V * V_x^2 - 0.5 * V_x^2 * V_xx - 0.5 * V_x * V_x + θ_h * V_xx
+# The boundary conditions are V(t, 0) = 0 and V(t, x) -> max(x - K, 0) as x -> ∞.
+# The initial condition is V(0, x) = max(x - K, 0) for a call option.
+
 
 """
 Use the parameters so that condition (C) in Michael Kouritzin's paper is satistified. 
@@ -153,10 +215,13 @@ check_condition_C(params)
 # Choose parameter set for the Heston model such that condition (C) is satisfied
 # params = HestonParams(S0=100.0, μ_h=0.02, ν=0.085, θ_h=4.0, κ_h=0.15, ρ=-0.75, v0=0.04)
 PS_explicit = HestonParams(S0=100.0, μ_h=0.0319, ν=0.093025, θ_h=6.21, κ_h=0.61, ρ=-0.7, v0=0.04)
-check_condition_C(PS_explicit)
+check_condition_C(PS_explicit) 
 T = 1.0
 num_simulations = 5
 times, S_paths, V_paths = explicit_heston_simulation(PS_explicit, T, num_simulations)
 plot_simulation(times, S_paths, V_paths)
-
 # Approximate the volatility process using the MCAM method 
+
+# Price of European call option using the MCAM volatility process with the explicit price equation of the Heston model 
+
+

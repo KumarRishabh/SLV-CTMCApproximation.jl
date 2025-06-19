@@ -1,17 +1,19 @@
 module DoubleDeathApproximation
-
 using Random
 using Distributions
 using LinearAlgebra
 using SparseArrays
 using StatsBase
-using ExponentialUtilities  # For efficient matrix exponential computation
-using FastExpm
-using Expokit
+using ExponentialUtilities: expv  # For efficient matrix exponential computation
+using FastExpm: fastExpm
+using Expokit: expmv
 using Parameters
 using ProgressMeter
 using Revise
 using Test
+using Printf
+using Plots
+
 # Exported functions and types
 export arcsinh_mapping, linear_mapping, construct_variance_levels, construct_asset_price_levels,
        simulate_variance_process, simulate_asset_price, compute_transition_matrix, compute_transition_matrices,
@@ -26,12 +28,12 @@ export arcsinh_mapping, linear_mapping, construct_variance_levels, construct_ass
 
 @with_kw mutable struct HestonParams
     S0::Float64 = 100.0
-    μ_h::Float64 = 0.02
-    ν::Float64 = 0.085
-    θ_h::Float64 = 0.04
-    κ_h::Float64 = 6.21
-    ρ::Float64 = -0.7
-    v0::Float64 = 0.501
+    μ::Float64 = 0.05
+    ν::Float64 = 0.10
+    κ::Float64 = 0.3
+    ϱ::Float64 = 2.0
+    ρ::Float64 = -0.5
+    v0::Float64 = 0.05
 end
 
 @with_kw mutable struct SABRParams
@@ -55,6 +57,39 @@ end
 #############
 # Mapping Functions
 #############
+
+const DEFAULT_H_PARAMS = HestonParams()
+
+#############
+# Mapping / Coefficient Functions
+#############
+
+# asset‐variance covariance terms
+function sigma11(S, V; params::HestonParams = DEFAULT_H_PARAMS)
+    sqrt(1 - params.ρ^2) * sqrt(V) * S
+end
+
+function sigma12(S, V; params::HestonParams = DEFAULT_H_PARAMS)
+    params.ρ * sqrt(V) * S
+end
+
+function sigma21(S, V; params::HestonParams = DEFAULT_H_PARAMS)
+    0.0
+end
+
+function sigma22(S, V; params::HestonParams = DEFAULT_H_PARAMS)
+    params.κ * sqrt(V)
+end
+
+# drift terms
+function b11(S, V; params::HestonParams = DEFAULT_H_PARAMS)
+    params.μ * S
+end
+
+function b22(V; params::HestonParams = DEFAULT_H_PARAMS)
+    params.ν - params.ϱ * V
+end
+
 
 """
     arcsinh_mapping(ξ, V₀, V_min, V_max, M, γ)
@@ -214,12 +249,15 @@ end
 Constructs the generator matrix Q for the CTMC approximation over a grid of
 N asset price levels and N variance levels. The step size is given by ℓ.
 """
-function construct_Q(N, ℓ; b1, b2, sigma11, sigma12, sigma22, reduced=false)
+function construct_Q(N, S_max, S_min, V_max, V_min; b1 = b11, b2 = b22, sigma11 = sigma11, sigma12 = sigma12, sigma22 = sigma22, reduced=false)
+    
     Q = spzeros(N * N, N * N)
-    for i in 1:N, j in 1:N
+    l1 = (S_max - S_min)/N
+    l2 = (V_max - V_min)/N
+    ProgressMeter.@showprogress for i in 1:N, j in 1:N
         idx = (i - 1) * N + j
-        S = i * ℓ
-        V = j * ℓ
+        S = i * l1
+        V = j * l2
         if reduced==false
             a10, s10, a01, s01, a11, s11, t12, t21 = transition_rates_dd(S, V, N;
                 b1=b1, b2=b2, sigma11=sigma11, sigma12=sigma12, sigma22=sigma22)
@@ -256,48 +294,6 @@ function construct_Q(N, ℓ; b1, b2, sigma11, sigma12, sigma22, reduced=false)
     return Q
 end
 
-"""
-    construct_generator_matrix_general(V_levels, κ, θ, σ)
-
-A dummy implementation to construct a generator matrix for the variance process.
-Replace this with your actual method.
-"""
-function construct_generator_matrix_general(V_levels, κ, θ, σ)
-    M = length(V_levels)
-    Q = spzeros(M, M)
-    # For illustration: a simple tridiagonal generator matrix
-    for i in 2:(M - 1)
-        Q[i, i - 1] = κ
-        Q[i, i + 1] = κ
-        Q[i, i] = -2 * κ
-    end
-    Q[1, 2] = κ
-    Q[1, 1] = -κ
-    Q[M, M - 1] = κ
-    Q[M, M] = -κ
-    return Q, V_levels
-end
-
-"""
-    construct_combined_generator_matrix(V_levels, S_levels, params)
-
-A dummy implementation that constructs the combined generator matrix for the joint
-asset price and variance process. Replace with your proper implementation.
-"""
-function construct_combined_generator_matrix(V_levels, S_levels, params)
-    M = length(V_levels)
-    N = length(S_levels)
-    total_states = M * N
-    Q = spzeros(total_states, total_states)
-    # Simple dummy construction: set off-diagonals to 1 and diagonal so that each row sums to zero.
-    for i in 1:total_states
-        Q[i, i] = -1.0
-        if i < total_states
-            Q[i, i + 1] = 1.0
-        end
-    end
-    return Q, V_levels, S_levels
-end
 
 #############
 # Option Pricing Functions
@@ -333,17 +329,19 @@ end
     price_european_option_exponentiation(S₀, V₀, params, T, M, N, mapping_function_S, mapping_function_V, K, option_type; risk_free_rate=0.05)
 
 Prices a European option using the matrix exponentiation approach.
+dV_t ;=; ν - ϱ V_t dt + κ sqrt{V_t} dW_t^{(2)},
+Because the CIR process is ergodic, its unconditional law converges to a Gamma distribution with mean ν/ϱ and variance frac{κ^2 ν^2}{2 ϱ}. 
 """
-function price_european_option_double_death(S_0, V_0, T, Q, variance_grid_size, asset_grid_size, strike_price, option_type, params::HestonParams; risk_free_rate=0.05)
+function price_european_option_double_death(S_0, V_0, T, variance_grid_size, asset_grid_size, strike_price, option_type, params::HestonParams; risk_free_rate=0.05)
     r = risk_free_rate
-    V_min = max(0.0, params.θ_h - 3 * params.ν * sqrt(params.θ_h) / sqrt(2 * params.κ_h)) # Lower bound for variance
-    V_max = params.θ_h + 3 * params.ν * sqrt(params.θ_h) / sqrt(2 * params.κ_h) # Upper bound for variance
+    V_min = max(0.0, params.ν / params.ϱ - 3 * params.κ * params.ν / sqrt(2 * params.ϱ)) # Lower bound for variance
+    V_max = params.ν / params.ϱ + 3 * params.κ * params.ν / sqrt(2 * params.ϱ) # Upper bound for variance
     V_levels = construct_variance_levels(V_min, V_max, variance_grid_size, linear_mapping, V_0)
 
-    S_min = S_0 * 0.1
-    S_max = S_0 * 5.0
+    S_min = S_0 * 0.1 # Could be adjusted based on the model
+    S_max = S_0 * 5.0  # Could be adjusted based on the model
     S_levels = construct_asset_price_levels(S_min, S_max, asset_grid_size, linear_mapping, S_0)
-
+    Q = construct_Q(asset_grid_size, S_max, S_min, V_max, V_min)
     # Use the double death approximation to construct the generator matrix
     # Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
     
@@ -364,15 +362,16 @@ end
 
 function price_european_option_exponentiation(S₀, V₀, params::HestonParams, T, M, N, mapping_function_S, mapping_function_V, K, option_type; risk_free_rate=0.05)
     r = risk_free_rate
-    V_min = max(0.0, params["theta"] - 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"]))
-    V_max = params["theta"] + 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"])
+    V_min = max(0.0, params.ν / params.ϱ - 3 * params.κ * params.ν / sqrt(2 * params.ϱ)) 
+    V_max = params.ν / params.ϱ + 3 * params.κ * params.ν / sqrt(2 * params.ϱ) 
     V_levels = construct_variance_levels(V_min, V_max, M, mapping_function_V, V₀)
 
-    S_min = S₀ * 0.5
-    S_max = S₀ * 1.5
+    S_min = S₀ * 0.1 # Could be adjusted based on the model
+    S_max = S₀ * 5.0 # Could be adjusted based on the model
     S_levels = construct_asset_price_levels(S_min, S_max, N, mapping_function_S, S₀)
 
-    Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
+    # Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
+    Q = construct_Q(N, S_max, S_min, V_max, V_min)
     P = compute_transition_matrix(Q, T)
     G = construct_payoff_vector(V_levels, S_levels, K, option_type)
 
@@ -391,10 +390,10 @@ end
 
 Prices a European call option using a Krylov subspace method.
 """
-function European_call_price_krylov(S_0, V_0, T, Q, variance_grid_size, asset_grid_size, strike_price, option_type, params::HestonParams; risk_free_rate=0.0)
+function European_call_price_krylov(S_0, V_0, params::HestonParams, T, variance_grid_size, asset_grid_size, mapping_function_S, mapping_function_V, strike_price, option_type; risk_free_rate=0.0, subspace_dim = 10)
     r = risk_free_rate
-    V_min = max(0.0, params.θ_h - 3 * params.ν * sqrt(params.θ_h) / sqrt(2 * params.κ_h)) # Lower bound for variance
-    V_max = params.θ_h + 3 * params.ν * sqrt(params.θ_h) / sqrt(2 * params.κ_h) # Upper bound for variance
+    V_min = max(0.0, params.ν / params.ϱ - 3 * params.κ * params.ν / sqrt(2 * params.ϱ)) # Lower bound for variance
+    V_max = params.ν / params.ϱ + 3 * params.κ * params.ν / sqrt(2 * params.ϱ) # Upper bound for variance
     V_levels = construct_variance_levels(V_min, V_max, variance_grid_size, linear_mapping, V_0)
 
     S_min = S_0 * 0.1
@@ -403,6 +402,7 @@ function European_call_price_krylov(S_0, V_0, T, Q, variance_grid_size, asset_gr
 
     # Use the double death approximation to construct the generator matrix
     # Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
+    Q = construct_Q(asset_grid_size, S_max, S_min, V_max, V_min)
     
     # P = compute_transition_matrix(Q, T)
     G = construct_payoff_vector(V_levels, S_levels, strike_price, option_type)
@@ -416,11 +416,17 @@ function European_call_price_krylov(S_0, V_0, T, Q, variance_grid_size, asset_gr
     π₀[initial_state] = 1.0
 
     Q_transpose = transpose(Q)
-    w_tilde = expmv(T, Q_transpose, π₀; tol=1e-6, m=20)
+    Q_sparse = sparse(Q)
+    # w_tilde = expmv(T, Q_transpose, π₀; tol=1e-6, m=subspace_dim)
+    # w_tilde = expv(T, Q_transpose, π₀; tol=1e-6, m=subspace_dim)
+    # track progress with Progressmeter for expmv
+    # println("Computing w_tilde using Krylov subspace method...")
+    @info "Computing w_tilde using Krylov subspace method..."
+    
+    w_tilde = expv(T, Q_transpose, π₀; tol=1e-6, m=min(subspace_dim, size(Q, 1) - 1))
     option_price = exp(-r * T) * dot(w_tilde, G)
     return option_price
 end
-
 """
     compute_transition_matrices(Q, Δt_array)
 
@@ -469,7 +475,9 @@ function backward_induction(P_matrices, V_option, V_levels, S_levels, K, option_
     M = length(V_levels)
     N = length(S_levels)
     total_states = M * N
-    for n in length(P_matrices):-1:1
+    # for n in length(P_matrices):-1:1
+    #use ProgressMeter to show progress
+    ProgressMeter.@showprogress for n in length(P_matrices):-1:1
         P = P_matrices[n]
         continuation_value = real.(P * V_option)
         exercise_value = zeros(total_states)
@@ -483,6 +491,9 @@ function backward_induction(P_matrices, V_option, V_levels, S_levels, K, option_
             end
         end
         continuation_value *= exp(-r * Δt_array[n])
+        # Use krylov method for efficient computation
+        V_option = expmv(-r * Δt_array[n], P, V_option)
+        # V_option = real.(P * V_option) * exp(-r * Δt_array[n])
         V_option = max.(exercise_value, continuation_value)
     end
     return V_option
@@ -493,18 +504,18 @@ end
 
 Prices an American option using CTMC backward induction.
 """
-function price_american_option_ctmc(S₀, V₀, params::Dict, T, M, N, mapping_function_S, mapping_function_V, K, option_type, monitoring_times)
-    r = params["r"]
+function price_american_option_ctmc(S₀, V₀, T, M, N, mapping_function_S, mapping_function_V, K, option_type, monitoring_times, params::HestonParams; risk_free_rate=0.05)
+    r = risk_free_rate
 
-    V_min = max(0.0, params["theta"] - 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"]))
-    V_max = params["theta"] + 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"])
+    V_min = max(0.0, params.ν / params.ϱ - 3 * params.κ * params.ν / sqrt(2 * params.ϱ))
+    V_max = params.ν / params.ϱ + 3 * params.κ * params.ν / sqrt(2 * params.ϱ)
     V_levels = construct_variance_levels(V_min, V_max, M, mapping_function_V, V₀)
 
     S_min = S₀ * 0.02
     S_max = S₀ * 2.5
     S_levels = construct_asset_price_levels(S_min, S_max, N, mapping_function_S, S₀)
 
-    Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
+    Q = construct_Q(N, S_max, S_min, V_max, V_min)
     Δt_array = diff(monitoring_times)
     P_matrices = compute_transition_matrices(Q, Δt_array)
     V_option = initialize_option_values(V_levels, S_levels, K, option_type)
@@ -518,8 +529,169 @@ function price_american_option_ctmc(S₀, V₀, params::Dict, T, M, N, mapping_f
     return option_price
 end
 
-end  # module CTMCModels
+"""
+    my_heston_generator(f, s, v, params)
 
-using .DoubleDeathApproximation
+Infinitesimal generator for the SDE system:
+    dS = μ S dt + sqrt((1 - ρ^2) v) S dW1 + ρ sqrt(v) S dW2
+    dv = (ν - ϱ v) dt + κ sqrt(v) dW2
+"""
+function my_heston_generator(f, s, v, M, N, params::HestonParams)
+    # extract parameters so params is used
+    μ = params.μ
+    ν = params.ν
+    ϱ = params.ϱ
+    κ = params.κ
+    ρ = params.ρ
+
+    l1 = (params.S0 * 5.0 - params.S0 * 0.1) / N  # Step size for asset price
+    l2 = (ν / ϱ + 3 * κ * ν / sqrt(2 * ϱ) - max(0.0, ν / ϱ - 3 * κ * ν / sqrt(2 * ϱ))) / N  # Step size for variance
+    # Numerical derivatives
+    df_ds = (f(s + l1, v) - f(s - l1, v)) / (2*l1)
+    df_dv = (f(s, v + l2) - f(s, v - l2)) / (2*l2)
+    d2f_ds2 = (f(s + l1, v) - 2 * f(s, v) + f(s - l1, v)) / (l1^2)
+    d2f_dv2 = (f(s, v + l2) - 2 * f(s, v) + f(s, v - l2)) / (l2^2)
+    d2f_dsdv = (f(s + l1, v + l2) - f(s + l1, v - l2) - f(s - l1, v + l2) + f(s - l1, v - l2)) / (4*l1 * l2)
+
+    # Generator as derived above
+    out = μ * s * df_ds +
+          (ν - ϱ * v) * df_dv +
+          0.5 * v * s^2 * d2f_ds2 +
+          0.5 * κ^2 * v * d2f_dv2 +
+          ρ * κ * v * s * d2f_dsdv
+
+    return out
+end
+
+function test_func(s, v)
+    return s^2 + v^2
+end
+
+function run_generator_convergence_test()
+    # params = HestonParams(S0=100.0, ν=0.04, κ=0.1, ϱ=6.21, ρ=-0.7, v0=0.04)
+    params = HestonParams()
+
+    # Grids to test (increasing resolution)
+    grid_sizes = [10, 15, 20, 25, 30, 40, 50, 70, 85, 100, 150]
+    errors = zeros(length(grid_sizes))
+
+    for (gi, N) in enumerate(grid_sizes)
+        M = N
+        S_levels = range(params.S0 * 0.1, params.S0 * 5.0, length=N) |> collect
+        V_levels = range(max(0.0, params.ν / params.ϱ - 3 * params.κ * params.ν / sqrt(2 * params.ϱ)), params.ν / params.ϱ + 3 * params.κ * params.ν / sqrt(2 * params.ϱ), length=M) |> collect
+
+        # Combined generator and grid
+        # Q, V_grid, S_grid = construct_combined_generator_matrix(V_levels, S_levels, params)
+        Q = construct_Q(N, params.S0 * 5.0, params.S0 * 0.1, params.ν / params.ϱ + 3 * params.κ * params.ν / sqrt(2 * params.ϱ), max(0.0, params.ν / params.ϱ - 3 * params.κ * params.ν / sqrt(2 * params.ϱ)); reduced=false)
+
+        # Evaluate f(s, v) on the grid
+        F_grid = zeros(M, N)
+        for vi in 1:M, si in 1:N
+            F_grid[vi, si] = test_func(S_levels[si], V_levels[vi])
+        end
+        plot(F_grid, title="Function Values on Grid", xlabel="Variance Levels", ylabel="Asset Price Levels",
+             colorbar=true, aspect_ratio=:equal, legend=false)
+        # Flatten (order: v varies slowest)
+        F_vec = vec(F_grid') # Julia is column-major
+
+        # Discrete generator action
+        L_discrete = Q * F_vec
+
+        # Analytic generator action at each grid point
+        L_analytic = zeros(M, N)
+        for vi in 1:M, si in 1:N
+            s = S_levels[si]
+            v = V_levels[vi]
+            L_analytic[vi, si] = my_heston_generator(test_func, s, v, M, N, params)
+        end
+        L_analytic_vec = vec(L_analytic')
+
+        # Compute grid error (max-norm or L2 norm)
+        errors[gi] = norm(L_discrete - L_analytic_vec, 2)
+        @printf("Grid %dx%d: max error = %g\n", M, N, errors[gi])
+    end
+
+    # Plot convergence
+    plot(grid_sizes, errors, xscale=:log10, yscale=:log10,
+         marker=:circle, xlabel="Grid size (N=M)", ylabel="Max error",
+         title="Convergence of Discrete Generator to Heston Operator")
+end
+end
+
+# using .DoubleDeathApproximation
 
 # Dummy data for testing
+
+# # Example usage
+S0 = 100.0      # Initial stock price
+V0 = 0.05    
+
+params = DoubleDeathApproximation.HestonParams()
+T = 1.0          # Time horizon (in years)
+M = 10 # Number of variance levels (states)
+N = 10     # Number of asset price levels (states)
+# # Choose the mapping function
+# # mapping_function_S = arcsinh_mapping
+# # mapping_function_V = arcsinh_mapping # or any other mapping function
+mapping_function_S = DoubleDeathApproximation.linear_mapping
+mapping_function_V = DoubleDeathApproximation.linear_mapping
+
+# # Simulate the Heston model65
+Strike = 100.0
+
+
+@time European_call_price_normal = DoubleDeathApproximation.price_european_option_exponentiation(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call", risk_free_rate=0.0)
+
+@time European_call_price = DoubleDeathApproximation.European_call_price_krylov(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call"; risk_free_rate=0.0)
+
+# Plot the convergence of the European call price as we increase the number of grid points
+European_call_prices = []
+for N in 20:10:80
+    @time European_call_price = DoubleDeathApproximation.European_call_price_krylov(S0, V0, params, T, N, N, mapping_function_S, mapping_function_V, Strike, "call"; risk_free_rate=0.05)
+    println("European Call Price with N=$N: $European_call_price")
+    push!(European_call_prices, European_call_price)
+end
+using Plots
+# plot the convergence of the European call price as we increase the number of grid points
+plot(20:10:150, European_call_prices, marker=:circle, xlabel="Number of grid points (N)", ylabel="European Call Price",
+     title="Convergence of European Call Price with Increasing Grid Points", legend=false)
+
+
+# # Price the American option
+# option_price = price_american_option_ctmc(S0, V0, params, T, M, N, linear_mapping, linear_mapping, Strike, "call", monitoring_times)
+
+
+# println("American Call option price using CTMC: $option_price")
+using .DoubleDeathApproximation
+M = 20 # Number of variance levels (states)
+N = 20     # Number of asset price levels (states)
+T = 1
+S0 = 100.0
+V0 = 0.501
+Strike = 100.0
+GT_params = DoubleDeathApproximation.HestonParams(S0=S0, ν=0.502, κ=0.2, ϱ=6.21, ρ=-0.7, v0=V0)
+Δt = 0.05
+monitoring_times = collect(Δt:Δt:T)
+
+@time price_european_option = DoubleDeathApproximation.price_european_option_exponentiation(S0, V0, GT_params, T, M, N, DoubleDeathApproximation.linear_mapping, DoubleDeathApproximation.linear_mapping, Strike, "call", risk_free_rate=0.0)
+price_american_option_ctmc = DoubleDeathApproximation.price_american_option_ctmc(S0, V0, T, M, N, DoubleDeathApproximation.linear_mapping, DoubleDeathApproximation.linear_mapping, Strike, "call", monitoring_times, GT_params)
+
+b11 = DoubleDeathApproximation.b11
+b22 = DoubleDeathApproximation.b22
+sigma11 = DoubleDeathApproximation.sigma11
+sigma12 = DoubleDeathApproximation.sigma12
+sigma22 = DoubleDeathApproximation.sigma22
+
+
+Q_matrix = DoubleDeathApproximation.construct_Q(200, 500.0, 0.0, 1.0, 0.0; 
+    b1=b11, b2=b22, sigma11=sigma11, sigma12=sigma12, sigma22=sigma22, reduced=false) # so the progress meter works
+
+
+function plot_option_price_curve(S_levels, V_levels, option_prices)
+    # Create a meshgrid for S and V
+    S_grid, V_grid = meshgrid(S_levels, V_levels)
+
+    # Plot the surface
+    surface(S_grid, V_grid, option_prices, xlabel="Asset Price", ylabel="Variance", zlabel="Option Price",
+            title="Option Price Surface", color=:viridis)
+end
