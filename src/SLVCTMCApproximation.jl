@@ -163,7 +163,7 @@ function simulateQtransitions(Q, bins, T; v0 = 0.04)
 
     # Initialize the transitions
     current_time = 0.0
-    # set the current state by assigning a volaility bin to the initial volatility
+    # set the current state by assigning a volatility bin to the initial volatility
     current_time, next_time = 0.0, 0.0
     # convert v0 to a volatility bin
     current_state = findfirst(bins .> v0) - 1

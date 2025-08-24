@@ -4,8 +4,7 @@ using Distributions
 using LinearAlgebra
 using SparseArrays
 using StatsBase
-using ExponentialUtilities: expv  # For efficient matrix exponential computation
-using FastExpm: fastExpm
+using FastExpm
 using Expokit: expmv
 using Parameters
 using ProgressMeter
@@ -25,16 +24,26 @@ export arcsinh_mapping, linear_mapping, construct_variance_levels, construct_ass
 #############
 # Type Definitions
 #############
+# For option pricing, r = μ 
 
 @with_kw mutable struct HestonParams
-    S0::Float64 = 100.0
-    μ::Float64 = 0.05
-    ν::Float64 = 0.10
-    κ::Float64 = 0.3
-    ϱ::Float64 = 2.0
-    ρ::Float64 = -0.5
-    v0::Float64 = 0.05
+    S0::Float64 = 10.0
+    μ::Float64 = 0.0
+    ν::Float64 = 0.035 * 4
+    κ::Float64 = 0.15
+    ϱ::Float64 = 4.0
+    ρ::Float64 = -0.75
+    v0::Float64 = 0.04
 end
+
+params = Dict(
+    "r"     => 0.05,
+    "mu"    => 0.0,
+    "kappa" => 4.0,
+    "theta" => 0.035,
+    "sigma" => 0.15,
+    "rho"   => -0.75
+)
 
 @with_kw mutable struct SABRParams
     S0::Float64 = 100.0
@@ -89,9 +98,9 @@ end
 function b22(V; params::HestonParams = DEFAULT_H_PARAMS)
     params.ν - params.ϱ * V
 end
-
-
-"""
+# After X_t = \log(S_t) and Y_t = √V_t
+function transformed_σ11(S, V; params::HestonParams = DEFAULT_H_PARAMS)
+    """
     arcsinh_mapping(ξ, V₀, V_min, V_max, M, γ)
 
 Maps a grid `ξ` in [0,1] to variance levels using the arcsinh transformation.
@@ -243,13 +252,14 @@ function transition_rates_reduced(S, V, N; b1, b2, sigma11, sigma12, sigma22)
     t12 = s11 = 0.0
     return (a10, s10, a01, s01, a11, s11, t12, t21)
 end
+
 """
     construct_Q(N, ℓ; b1, b2, sigma11, sigma12, sigma22)
 
 Constructs the generator matrix Q for the CTMC approximation over a grid of
 N asset price levels and N variance levels. The step size is given by ℓ.
 """
-function construct_Q(N, S_max, S_min, V_max, V_min; b1 = b11, b2 = b22, sigma11 = sigma11, sigma12 = sigma12, sigma22 = sigma22, reduced=false)
+function construct_Q(N, S_max, S_min, V_max, V_min; b1 = b11, b2 = b22, sigma11 = sigma11, sigma12 = sigma12, sigma22 = sigma22, reduced=true)
     
     Q = spzeros(N * N, N * N)
     l1 = (S_max - S_min)/N
@@ -332,7 +342,7 @@ Prices a European option using the matrix exponentiation approach.
 dV_t ;=; ν - ϱ V_t dt + κ sqrt{V_t} dW_t^{(2)},
 Because the CIR process is ergodic, its unconditional law converges to a Gamma distribution with mean ν/ϱ and variance frac{κ^2 ν^2}{2 ϱ}. 
 """
-function price_european_option_double_death(S_0, V_0, T, variance_grid_size, asset_grid_size, strike_price, option_type, params::HestonParams; risk_free_rate=0.05)
+function price_european_option_double_death(S_0, V_0, T, variance_grid_size, asset_grid_size, strike_price, option_type, params::HestonParams; risk_free_rate=0.0)
     r = risk_free_rate
     V_min = max(0.0, params.ν / params.ϱ - 3 * params.κ * params.ν / sqrt(2 * params.ϱ)) # Lower bound for variance
     V_max = params.ν / params.ϱ + 3 * params.κ * params.ν / sqrt(2 * params.ϱ) # Upper bound for variance
@@ -402,7 +412,7 @@ function European_call_price_krylov(S_0, V_0, params::HestonParams, T, variance_
 
     # Use the double death approximation to construct the generator matrix
     # Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
-    Q = construct_Q(asset_grid_size, S_max, S_min, V_max, V_min)
+    Q = construct_Q(asset_grid_size, S_max, S_min, V_max, V_min; reduced = false)
     
     # P = compute_transition_matrix(Q, T)
     G = construct_payoff_vector(V_levels, S_levels, strike_price, option_type)
@@ -416,14 +426,14 @@ function European_call_price_krylov(S_0, V_0, params::HestonParams, T, variance_
     π₀[initial_state] = 1.0
 
     Q_transpose = transpose(Q)
-    Q_sparse = sparse(Q)
+    @info "Shape of Q_transpose: $(size(Q_transpose))"
     # w_tilde = expmv(T, Q_transpose, π₀; tol=1e-6, m=subspace_dim)
     # w_tilde = expv(T, Q_transpose, π₀; tol=1e-6, m=subspace_dim)
     # track progress with Progressmeter for expmv
     # println("Computing w_tilde using Krylov subspace method...")
     @info "Computing w_tilde using Krylov subspace method..."
     
-    w_tilde = expv(T, Q_transpose, π₀; tol=1e-6, m=min(subspace_dim, size(Q, 1) - 1))
+    @time w_tilde = expmv(T, Q_transpose, π₀; tol=1e-6, m=min(subspace_dim, size(Q, 1) - 1))
     option_price = exp(-r * T) * dot(w_tilde, G)
     return option_price
 end
@@ -623,13 +633,13 @@ end
 # Dummy data for testing
 
 # # Example usage
-S0 = 100.0      # Initial stock price
-V0 = 0.05    
+S0 = 10.0      # Initial stock price
+V0 = 0.04    
 
 params = DoubleDeathApproximation.HestonParams()
 T = 1.0          # Time horizon (in years)
-M = 10 # Number of variance levels (states)
-N = 10     # Number of asset price levels (states)
+M = 150 # Number of variance levels (states)
+N = 150     # Number of asset price levels (states)
 # # Choose the mapping function
 # # mapping_function_S = arcsinh_mapping
 # # mapping_function_V = arcsinh_mapping # or any other mapping function
@@ -637,13 +647,12 @@ mapping_function_S = DoubleDeathApproximation.linear_mapping
 mapping_function_V = DoubleDeathApproximation.linear_mapping
 
 # # Simulate the Heston model65
-Strike = 100.0
+Strike = 4.0
 
 
-@time European_call_price_normal = DoubleDeathApproximation.price_european_option_exponentiation(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call", risk_free_rate=0.0)
+# @time European_call_price_normal = DoubleDeathApproximation.price_european_option_exponentiation(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call", risk_free_rate=0.05)
 
-@time European_call_price = DoubleDeathApproximation.European_call_price_krylov(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call"; risk_free_rate=0.0)
-
+@time European_call_price = DoubleDeathApproximation.European_call_price_krylov(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call"; risk_free_rate=0.0, subspace_dim=30)
 # Plot the convergence of the European call price as we increase the number of grid points
 European_call_prices = []
 for N in 20:10:80

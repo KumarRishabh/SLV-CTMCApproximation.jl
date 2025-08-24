@@ -8,7 +8,7 @@ using LinearAlgebra
 using Parameters
 # continuation value and payoff functions
 using ProgressMeter
-
+using Printf
 @with_kw mutable struct HestonParams
     S0::Float64 = 100.0
     μ_h::Float64 = 0.02
@@ -26,20 +26,6 @@ b(v; ν = 0.085, θ = 0.04, κ = 6.21) = ν - ϱ * v
 b_plus(v) = max(b(v), 0)
 b_minus(v) = max(-b(v), 0)
 
-# Construct 1-d generator for the birth-death matrix (non-homogeneous) 
-function birth_death_matrix(λ, μ, n)
-    A = zeros(n, n)
-    for i in 1:n
-        if i > 1
-            A[i, i-1] = λ[i]
-        end
-        A[i, i] = - (λ[i] + μ[i])
-        if i < n
-            A[i, i+1] = μ[i]
-        end
-    end
-    return A
-end
 
 # Construct the 1-d generator for the volatility process using the MCAM method provided in the paper by Cui 
 function construct_generator_reflecting(v::Vector{Float64},
@@ -96,10 +82,71 @@ function construct_generator_reflecting(v::Vector{Float64},
     return Q
 end
 
+# Sample volatility process through CTMC simulation
+function simulateQtransitions(Q, bins, T; v0 = 0.04)
+    # Input: Q: Generator matrix for the Volatility process
+    # bins: Bins for the volatility process
+    # Output: Transitions for the volatility process (till time T)
+
+    # Initialize the transitions
+    current_time = 0.0
+    # set the current state by assigning a volatility bin to the initial volatility
+    current_time, next_time = 0.0, 0.0
+    # convert v0 to a volatility bin
+    current_state = findfirst(bins .> v0) - 1
+    # println("Current State: ", current_state)
+    state_transitions = [current_state]
+    transition_times = [current_time]
+    while current_time < T
+
+        next_time = current_time + rand(Exponential(-1/Q[current_state, current_state])) # Calculate the next transition time
+        # Calculate the transition probabilities
+        e_i = (i, num_states) -> (e = zeros(Float64, num_states); e[i] = 1.0; e)
+
+        transition_probs = e_i(current_state, length(bins)) + Q[current_state, :] ./ (-1* Q[current_state, current_state])
+        next_state = sample(1:length(bins), Weights(transition_probs))
+        push!(state_transitions, next_state)
+        push!(transition_times, next_time)
+        current_state = next_state
+        current_time = next_time
+    end 
+    return (state_transitions, transition_times)
+end
+
+# Calculate the conditional mean and variance of the log price provided a sample path of the volatility process
+# 
+#\mu_{\mathrm{GP}}(\omega) = \left(\mu-\frac{\nu\rho}{\kappa}\right)t + \left(\frac{\rho\varrho}{\kappa}-\frac12\right)\!\int_{0}^{t}\omega(s)\,ds + \frac{\rho}{\kappa}\bigl(\omega(t)-\omega(0)\bigr), \\
+# \sigma_{\mathrm{GP}}^{2}(\omega) = (1-\rho^{2})\!\int_{0}^{t}\omega(s)\,ds.
+function conditional_mean_variance(log_price_path, volatility_path, transition_times, T)
+    num_steps = length(log_price_path)
+    conditional_mean = zeros(num_steps)
+    conditional_variance = zeros(num_steps)
+    # Integral term 
+    integral_term = 0.0
+    for i in 1:num_steps
+        dt = transition_times[i] - (i > 1 ? transition_times[i-1] : 0.0)
+        integral_term += volatility_path[i] * dt
+    end
+    conditional_mean = (μ - (ν * ρ) / κ) * T +
+        (ρ * ϱ / κ - 0.5) * integral_term +
+        (ρ / κ) * (volatility_path[end] - volatility_path[1])
+    conditional_variance = (1 - ρ^2) * integral_term
+    return conditional_mean, conditional_variance
+end
+
+function BS_european_option_price(S0, V0, K, μ_GP, σ_GP, ρ,  T; r = 0.0)
+    d1 = (log(S0 / K) + (μ_GP + 0.5 * σ_GP^2) * T) / (σ_GP * (1 - ρ^2) * V0sqrt(T)) # Check the formula for d1
+    d2 = d1 - σ_GP * sqrt((1 - ρ^2) * V0 * T) # Check the formula for d2
+    call_price = S0 * cdf(Normal(0, 1), d1) - K * exp(-r * T) * cdf(Normal(0, 1), d2)
+    return call_price
+end
+
+
 # -------------- Example usage ---------------
 mu_fun(x) = 0.5 - x
 sigma_fun(x) = 0.2 + 0.1*x
-
+v_min = 1e-3 
+v_max = 10.0
 vgrid = range(1e-3, 10.0, length=101) |> collect
 Q = construct_generator_reflecting(vgrid, mu_fun, sigma_fun)
 
@@ -186,6 +233,18 @@ function explicit_heston_simulation(params::HestonParams, T, num_simulations; nu
     return times, S_paths, V_paths
 end
 
+function explicit_european_option_price(params::HestonParams, T, K, num_simulations; num_steps=1000)
+    times, S_paths, V_paths = explicit_heston_simulation(params, T, num_simulations; num_steps=num_steps)
+    
+    # Calculate the option payoff at maturity
+    payoffs = max.(S_paths[:, end] .- K, 0.0)
+    
+    # Discount the expected payoff back to present value
+    option_price = exp(-params.μ_h * T) * mean(payoffs)
+    
+    return option_price
+end
+
 function plot_simulation(times, S_paths, V_paths; title="Heston Model Simulation")
     p1 = plot(times, S_paths', legend=false, title="Stock Price Paths", xlabel="Time", ylabel="Stock Price")
     p2 = plot(times, V_paths', legend=false, title="Variance Paths", xlabel="Time", ylabel="Variance")
@@ -212,14 +271,15 @@ end
 params = HestonParams(S0=100.0, μ_h=0.02, ν=0.085, θ_h=4.0, κ_h=0.15, ρ=-0.75, v0=0.04)
 check_condition_C(params)
 
+
 # Choose parameter set for the Heston model such that condition (C) is satisfied
-# params = HestonParams(S0=100.0, μ_h=0.02, ν=0.085, θ_h=4.0, κ_h=0.15, ρ=-0.75, v0=0.04)
-PS_explicit = HestonParams(S0=100.0, μ_h=0.0319, ν=0.093025, θ_h=6.21, κ_h=0.61, ρ=-0.7, v0=0.04)
-check_condition_C(PS_explicit) 
-T = 1.0
-num_simulations = 5
-times, S_paths, V_paths = explicit_heston_simulation(PS_explicit, T, num_simulations)
-plot_simulation(times, S_paths, V_paths)
+# # params = HestonParams(S0=100.0, μ_h=0.02, ν=0.085, θ_h=4.0, κ_h=0.15, ρ=-0.75, v0=0.04)
+# PS_explicit = HestonParams(S0=100.0, μ_h=0.0319, ν=0.093025, θ_h=6.21, κ_h=0.61, ρ=-0.7, v0=0.04)
+# check_ondition_C(PS_explicit) 
+# T = 1.0
+# num_simulations = 5
+# times, S_paths, V_paths = explicit_heston_simulation(PS_explicit, T, num_simulations)
+# plot_simulation(times, S_paths, V_paths)c
 # Approximate the volatility process using the MCAM method 
 
 # Price of European call option using the MCAM volatility process with the explicit price equation of the Heston model 

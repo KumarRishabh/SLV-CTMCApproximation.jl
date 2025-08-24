@@ -1,19 +1,15 @@
 module CuiSDEApproximation
+
 using Random
 using Distributions
 using LinearAlgebra
 using Plots
-using StatsBase
-using ExponentialUtilities: expv  # For efficient matrix exponential computation
-using FastExpm: fastExpm  # For fast matrix exponentiation
+using StatsBase  # For efficient matrix exponential computation
+using FastExpm
 using Expokit: expmv
 using Revise
 using SparseArrays
 using ProgressMeter
-using Printf
-using TimerOutputs
-
-const to = TimerOutput()
 
 """
 Constructs the generator matrix Q for the CTMC approximation using the general format.
@@ -117,6 +113,25 @@ function construct_generator_matrix_general(V_levels, kappa, theta, sigma)
     # Calculate k_i (differences between grid points)
     k = diff(V_levels)  # Length M - 1
 
+    # Enforce the constraints on k_i
+    # for i in 1:M-1
+    #     k_i = k[i]
+    #     # Constraint: k_i ≤ s2_s[i] / |m_s[i]|
+    #     if abs(m_s[i]) > 1e-8  # Avoid division by zero
+    #         max_k_i = s2_s[i] / abs(m_s[i])
+    #         if k_i > max_k_i
+    #             k[i] = max_k_i
+    #         end
+    #     end
+    # end
+
+    # Recalculate V_levels based on adjusted k_i if necessary
+    # V_levels_adjusted = [V_levels[1]]
+    # for i in 1:M-1
+    #     V_levels_adjusted = [V_levels_adjusted; V_levels_adjusted[end] + k[i]]
+    # end# Instead of this (Unoptimized 2)
+
+
 # Use this (Optimiztion 2)
     V_levels_adjusted = Vector{Float64}(undef, M)
     V_levels_adjusted[1] = V_levels[1]
@@ -139,6 +154,7 @@ function construct_generator_matrix_general(V_levels, kappa, theta, sigma)
             k_i_minus1 = k[i - 1]
             k_i = k[i]
             denominator = k_i_minus1 + k_i
+
             q_im1 = (m_minus[i] / k_i_minus1) + (s2_s[i] - (k_i_minus1 * m_minus[i] + k_i * m_plus[i])) / (k_i_minus1 * denominator)
             q_ip1 = (m_plus[i] / k_i) + (s2_s[i] - (k_i_minus1 * m_minus[i] + k_i * m_plus[i])) / (k_i * denominator)
 
@@ -185,6 +201,11 @@ Main function to simulate Heston model paths using CTMC approximation with gener
 - `times_variance::Vector{Float64}`: Times of the variance process.
 """
 
+function construct_log_transformed_combined_generator(V_levels, S_levels, params)
+    # Construct the generator matrix for the log-transformed processes
+    # Write a function to construct the log transformed combined generator
+    return Q
+end 
 
 function construct_combined_generator_matrix(V_levels, S_levels, params)
     M = length(V_levels)
@@ -200,7 +221,7 @@ function construct_combined_generator_matrix(V_levels, S_levels, params)
     rho = params["rho"]
     r = params["r"]  # Risk-free rate
 
-    # Construct generator for variance (or Volatility) process (as before)
+    # Construct generator for variance process (as before)
     Q_V, V_levels = construct_generator_matrix_general(V_levels, kappa, theta, sigma)
 
     # Construct generator for asset price process
@@ -208,25 +229,23 @@ function construct_combined_generator_matrix(V_levels, S_levels, params)
     Q_S = construct_asset_price_generator(S_levels, V_levels, params)
 
     # Combine the generators
-    @showprogress 1 "Constructing combined generator matrix..." for vi in 1:M
+    for vi in 1:M
         for si in 1:N
             state_idx = (vi - 1) * N + si
 
             # Variance transitions
             for vj in 1:M
-                qv = Q_V[vi, vj]
-                if qv != 0.0
+                if Q_V[vi, vj] != 0
                     target_idx = (vj - 1) * N + si
-                    Q[state_idx, target_idx] += qv
+                    Q[state_idx, target_idx] += Q_V[vi, vj]
                 end
             end
 
             # Asset price transitions
             for sj in 1:N
-                qs = Q_S[si, sj, vi]
-                if qs != 0.0
+                if Q_S[si, sj, vi] != 0
                     target_idx = (vi - 1) * N + sj
-                    Q[state_idx, target_idx] += qs
+                    Q[state_idx, target_idx] += Q_S[si, sj, vi]
                 end
             end
         end
@@ -234,9 +253,7 @@ function construct_combined_generator_matrix(V_levels, S_levels, params)
 
     return Q, V_levels, S_levels
 end
-
-# Closest to the formulation in the paper
-function construct_asset_price_generator(V_levels, S_levels, params)
+function construct_asset_price_generator(S_levels, V_levels, params)
     N = length(S_levels)
     M = length(V_levels)
     Q_S = zeros(N, N, M)
@@ -244,7 +261,7 @@ function construct_asset_price_generator(V_levels, S_levels, params)
     r = params["r"]
     rho = params["rho"]
 
-    @showprogress 1 "Constructing asset price generator..." for vi in 1:M
+    for vi in 1:M
         v_i = V_levels[vi]
 
         # Drift and diffusion coefficients for the asset price process
@@ -390,7 +407,6 @@ function price_european_option_exponentiation(S0, V0, params::Dict, T, M, N, map
 
     # Construct the combined generator matrix
     Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
-    # Q = construct_asset_price_generator(V_levels, S_levels, params)
 
     # Compute the transition probability matrix
     P = compute_transition_matrix(Q, T)
@@ -416,38 +432,59 @@ function price_european_option_exponentiation(S0, V0, params::Dict, T, M, N, map
     return option_price
 end
 
-function European_option_price_krylov(S0, V0, params::Dict, T, M, N, mapping_function_S, mapping_function_V, K, option_type; risk_free_rate=0.0, tol=1e-6, projections=10)
+function European_call_price_krylov(S0, V0, params::Dict, T, M, N, mapping_function_S, mapping_function_V, K, option_type; risk_free_rate=0.0)
+    # Unpack parameters
     r = risk_free_rate
-
+    # Construct variance levels and asset price levels
     V_min = max(0.0, params["theta"] - 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"]))
     V_max = params["theta"] + 3 * params["sigma"] * sqrt(params["theta"]) / sqrt(2 * params["kappa"])
     V_levels = construct_variance_levels(V_min, V_max, M, mapping_function_V, V0)
 
-    S_min = S0 * 0.02
+    S_min = S0 * 0.02  # Set based on expected range of asset prices
     S_max = S0 * 5.0
     S_levels = construct_asset_price_levels(S_min, S_max, N, mapping_function_S, S0)
 
+    # Construct the combined generator matrix
     Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
 
-    G = construct_payoff_vector(V_levels, S_levels, K, option_type)
+    # Compute the transition probability matrix
+    # @time P = compute_transition_matrix(Q, T)
 
+    # Construct the payoff vector
+    G = construct_payoff_vector(V_levels, S_levels, K, option_type)
+    # println("Payoff vector: ", G)
+
+    # Define initial state
+    # Find the indices closest to initial V0 and S0
     idx_V0 = findmin(abs.(V_levels .- V0))[2]
     idx_S0 = findmin(abs.(S_levels .- S0))[2]
     initial_state = (idx_V0 - 1) * N + idx_S0
 
+    # Initial distribution vector
     π0 = zeros(length(G))
     π0[initial_state] = 1.0
 
+    # Compute the option price
+    # option_price = exp(-r * T) * (π0'*P*G)[1]
+    # Compute w_tilde = exp(Q^T t) * v
     Q_transpose = transpose(Q)
-    # QT_sparse = sparse(Q_transpose)
 
-    # @time w_tilde = expmv(T, QT_sparse, π0; tol = tol, m = projections)
-    w_tilde = expv(T, Q_transpose, π0; tol = tol, m = projections)
-    
+    w_tilde = expmv(T, Q_transpose, π0; tol = 1e-6, m = 30)
     option_price = exp(-r * T) * dot(w_tilde, G)
+    println("w_tilde: ")
 
     return option_price
 end
+
+# European_call_price_krylov(10.0, 0.04, Dict("r" => 0.0, "mu" => 0.05, "kappa" => 4, "theta" => 0.035, "sigma" => 0.15, "rho" => -0.75), 1.0, 50, 50, arcsinh_mapping, arcsinh_mapping, 4.0, "call")
+# The rest of the functions remain the same:
+# - construct_variance_levels
+# - simulate_variance_process
+# - simulate_asset_price
+
+# Example mapping functions (as before)
+# ...
+
 
 
 # fast matrix exponentiation for tridiagonal such that row sum is zero
@@ -489,7 +526,7 @@ function backward_induction(P_matrices, V_option, V_levels, S_levels, K, option_
     total_states = M * N
     N_steps = length(P_matrices)
 
-    @showprogress 1 "Backward induction..." for n in N_steps:-1:1
+    for n in N_steps:-1:1
         P = P_matrices[n]
         # Expected continuation value
         continuation_value = real.(P * V_option)
@@ -500,12 +537,12 @@ function backward_induction(P_matrices, V_option, V_levels, S_levels, K, option_
             S_i = S_levels[si]
             if option_type == "call"
                 exercise_value[state_idx] = max(S_i - K, 0.0)
-            else
+            elseif option_type == "put"
                 exercise_value[state_idx] = max(K - S_i, 0.0)
             end
         end
         # Discount continuation value
-        continuation_value .*= exp(-r * Δt_array[n])
+        continuation_value *= exp(-r * Δt_array[n])
         # Update option value
         V_option = max.(exercise_value, continuation_value)
     end
@@ -527,9 +564,8 @@ function price_american_option_ctmc(S0, V0, params::Dict, T, M, N, mapping_funct
 
     # println("Constructed asset and variance levels:", S_levels, V_levels)
     # Construct the combined generator matrix
-    # Q = construct_asset_price_generator(V_levels, S_levels, params)
     Q, V_levels, S_levels = construct_combined_generator_matrix(V_levels, S_levels, params)
-    println("Constructed generator matrix Q")
+    println("Constructed combined generator matrix")
 
     # Compute time intervals
     Δt_array = diff(monitoring_times)
@@ -553,227 +589,74 @@ function price_american_option_ctmc(S0, V0, params::Dict, T, M, N, mapping_funct
 
     return option_price
 end
-
-# Compute the convergence of the operator as compared to the theoretical operator 
-function heston_generator(f, s, v, params)
-    r = params["r"]
-    kappa = params["kappa"]
-    theta = params["theta"]
-    sigma = params["sigma"]
-    rho = params["rho"]
-
-    # First derivatives (central difference, finite differences for illustration)
-    # For analytic functions, use ForwardDiff or Symbolics for higher accuracy.
-
-    # Numerical derivatives using central finite differences (h very small)
-    h = 1e-5
-    df_ds  = (f(s + h, v) - f(s - h, v)) / (2h)
-    df_dv  = (f(s, v + h) - f(s, v - h)) / (2h)
-    d2f_ds2 = (f(s + h, v) - 2*f(s, v) + f(s - h, v)) / (h^2)
-    d2f_dv2 = (f(s, v + h) - 2*f(s, v) + f(s, v - h)) / (h^2)
-    d2f_dsdv = (f(s + h, v + h) - f(s + h, v - h) - f(s - h, v + h) + f(s - h, v - h)) / (4h^2)
-
-    # Infinitesimal generator
-    out = r * s * df_ds +
-          kappa * (theta - v) * df_dv +
-          0.5 * v * s^2 * d2f_ds2 +
-          0.5 * sigma^2 * v * d2f_dv2 +
-          rho * sigma * v * s * d2f_dsdv
-    return out
 end
 
-function test_func(s, v)
-    return s^2 + v^2
-end
+# Cui parameters 
 
-function run_generator_convergence_test()
-    params = Dict(
-        "r"     => 0.03,
-        "kappa" => 2.0,
-        "theta" => 0.09,
-        "sigma" => 0.4,
-        "rho"   => -0.7
-    )
-
-    # Grids to test (increasing resolution)
-    grid_sizes = [10, 20, 40, 80]
-    errors = zeros(length(grid_sizes))
-
-    for (gi, N) in enumerate(grid_sizes)
-        M = N
-        S_levels = range(80, 120, length=N) |> collect
-        V_levels = range(0.01, 0.25, length=M) |> collect
-
-        # Combined generator and grid
-        Q, V_grid, S_grid = construct_combined_generator_matrix(V_levels, S_levels, params)
-
-        # Evaluate f(s, v) on the grid
-        F_grid = zeros(M, N)
-        for vi in 1:M, si in 1:N
-            F_grid[vi, si] = test_func(S_grid[si], V_grid[vi])
-        end
-
-        # Flatten (order: v varies slowest)
-        F_vec = vec(F_grid') # Julia is column-major
-
-        # Discrete generator action
-        L_discrete = Q * F_vec
-
-        # Analytic generator action at each grid point
-        L_analytic = zeros(M, N)
-        for vi in 1:M, si in 1:N
-            s = S_grid[si]
-            v = V_grid[vi]
-            L_analytic[vi, si] = heston_generator(test_func, s, v, params)
-        end
-        L_analytic_vec = vec(L_analytic')
-
-        # Compute grid error (max-norm or L2 norm)
-        errors[gi] = norm(L_discrete - L_analytic_vec, Inf)
-        @printf("Grid %dx%d: max error = %g\n", M, N, errors[gi])
-    end
-
-    # Plot convergence
-    plot(grid_sizes, errors, xscale=:log10, yscale=:log10,
-         marker=:circle, xlabel="Grid size (N=M)", ylabel="Max error",
-         title="Convergence of Discrete Generator to Heston Operator")
-end
-
-
-end
-# # Example usage
-S0 = 10.0        # Initial stock price
+S0 = 10.0 
 V0 = 0.04
-
+K = 4.0
+# Example usage
+using .CuiSDEApproximation
+S0 = 10.0         # Initial stock price
+V0 = 0.04    
+# S0 = 10, v0 = 0.04, T = 1, K = 4, ρ = −0.75, σv = 0.15, η = 4, θ = 0.035, r = 0      # Initial variance
 params = Dict(
-    "r" => 0.05,        # Risk-free rate
+    "r" => 0.0,        # Risk-free rate
     "mu" => 0.0,        # Expected return
     "kappa" => 4,      # Mean reversion rate
     "theta" => 0.035,     # Long-term variance
     "sigma" => 0.15,      # Volatility of variance
     "rho" => -0.75        # Correlation between asset and variance
 )
-T = 1.0/5          # Time horizon (in years)
-M = 50             # Number of variance levels (states)
-N = 50             # Number of asset price levels (states)
-# # Choose the mapping function
-# # mapping_function_S = arcsinh_mapping
-# # mapping_function_V = arcsinh_mapping # or any other mapping function
+T = 1.0          # Time horizon (in years)
+M = 250 # Number of variance levels (states)
+N = 250       # Number of asset price levels (states)
+# Choose the mapping function
+# mapping_function_S = arcsinh_mapping
+# mapping_function_V = arcsinh_mapping # or any other mapping function
+# mapping_function_S = CuiSDEApproximation.arcsinh_mapping
+# mapping_function_V = CuiSDEApproximation.arcsinh_mapping 
 mapping_function_S = CuiSDEApproximation.linear_mapping
 mapping_function_V = CuiSDEApproximation.linear_mapping
 
-# # Simulate the Heston model
-Strike = 11.0
+# Simulate the Heston model65
+Strike = 4.0
 # times_asset, S, V_path, times_variance = simulate_heston_ctmc_general(S0, V0, params, T, M, mapping_function_V)
 
-# # plot(times_asset, S, label="Asset Price", xlabel="Time", ylabel="Price", legend=:topleft)
-# # plot!(times_variance, V_path, label="Variance", xlabel="Time", ylabel="Variance", legend=:topleft)
-# # plot(times_variance, V_path, label="Variance", xlabel="Time", ylabel="Variance", legend=:topleft)
-using Profile
-using ProfileView: @profview
-using TimerOutputs
+# plot(times_asset, S, label="Asset Price", xlabel="Time", ylabel="Price", legend=:topleft)
+# plot!(times_variance, V_path, label="Variance", xlabel="Time", ylabel="Variance", legend=:topleft)
+# plot(times_variance, V_path, label="Variance", xlabel="Time", ylabel="Variance", legend=:topleft)
 
-#  @time European_call_price_normal = CuiSDEApproximation.price_european_option_exponentiation(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call", risk_free_rate=0.0)
-@time European_call_price = CuiSDEApproximation.European_option_price_krylov(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call"; risk_free_rate=0.0, tol=1e-12, projections=20)
-show(European_call_price)
-@time European_call_price_normal = CuiSDEApproximation.price_european_option_exponentiation(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call", risk_free_rate=0.0)
-monitoring_times = collect(0.0:0.05:T)|> collect
-
-
-# Profile the European option pricing (Krylov version) to locate bottlenecks
-option_price = CuiSDEApproximation.price_american_option_ctmc(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "put", monitoring_times)
-
-# Profile.print(format = :flat)
-
-
-# println("American Call option price using CTMC: $option_price")
-CuiSDEApproximation.run_generator_convergence_test()
-
-
-using Expokit: expmv
-using ExponentialUtilities: expv
-using LinearAlgebra
-using FastExpm: fastExpm
-function compare_expmv_expv(N)
-    # Define a test matrix and vector
-    # N = 10000  # Size of the matrix and vector
-    # A = rand(N, N)
-    # Construct a randomly generator matrix
-    A = rand(N, N)  # Random matrix
-    A = A - diagm(diag(A))  # Ensure diagonal is zero for a generator matrix
-    A = A - diagm(vec(sum(A, dims=2)))  # Ensure row sums are zero
-    x = rand(N)
-    t = 10.0  # Time parameter for the matrix exponential
-    # Compute the matrix-vector product using expmv
-    @time transpose_A = transpose(A)  # Ensure A is transposed for expmv
-    # @time y_expmv = expmv(t, transpose_A, x)
-    # @time y_exp = fastExpm(A * t) * x  # Direct computation for comparison
-    # Compute the matrix-vector product using expv
-    @time y_expv = expv(t, transpose_A, x)
-
-    # Compare the results
-    # return norm(y_expmv - y_expv)
-end
-
-compare_expmv_expv(16000)
-
-
-
-"""
-Plot the European option price as a function of strike using CTMC approximation.
-
-# Arguments
-- `S0::Float64`: Initial stock price.
-- `V0::Float64`: Initial variance.
-- `params::Dict`: Heston model parameters.
-- `T::Float64`: Time to maturity.
-- `M::Int`: Number of variance levels.
-- `N::Int`: Number of asset price levels.
-- `mapping_function_S::Function`: Mapping for asset grid.
-- `mapping_function_V::Function`: Mapping for variance grid.
-- `strike_range::AbstractVector{<:Real}`: Sequence of strike prices.
-- `option_type::String`: "call" or "put".
-
-# Usage
-```julia
-using CuiSDEApproximation
-strikes = range(5.0, 15.0, length=50)
-plot_option_price_vs_strike(10.0, 0.04, params, 1.0/5, 50, 50, mapping_function_S, mapping_function_V, strikes, "call")
-```
-"""
-
+# @time European_call_price_normal = price_european_option_exponentiation(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call", risk_free_rate=0.0)
+@time European_call_price = CuiSDEApproximation.European_call_price_krylov(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call"; risk_free_rate=0.0)
+println("European Call Price (Krylov): ", European_call_price)
+# Plot European call price vs strike
 using Plots
-function plot_option_price_vs_strike(
-    S0::Float64, V0::Float64, params::Dict, T::Float64,
-    M::Int, N::Int, mapping_function_S::Function, mapping_function_V::Function,
-    strike_range::AbstractVector{<:Real}, option_type::String;
-    use_krylov::Bool = true, tol::Float64 = 1e-6, projections::Int = 10, risk_free_rate::Float64 = 0.0
-)
-    # Preallocate price array
+function plot_call_price_vs_strike(S0, V0, params::Dict, T, M, N, mapping_function_S, mapping_function_V, strike_range::AbstractVector{Float64}; risk_free_rate=0.0, use_krylov=true)
     prices = Float64[]
     for K in strike_range
-        price = use_krylov ? CuiSDEApproximation.European_option_price_krylov(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, K, option_type; risk_free_rate = risk_free_rate, tol = tol, projections = projections) : CuiSDEApproximation.price_european_option_exponentiation(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, K, option_type; risk_free_rate = risk_free_rate)
+        if use_krylov
+            price = CuiSDEApproximation.European_call_price_krylov(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, K, "call"; risk_free_rate=risk_free_rate)
+        else
+            price = CuiSDEApproximation.price_european_option_exponentiation(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, K, "call"; risk_free_rate=risk_free_rate)
+        end
+        # price = CuiSDEApproximation.European_call_price_krylov(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, K, "call"; risk_free_rate=risk_free_rate)
         push!(prices, price)
     end
-    for K in strike_range
-        @show K, prices[end]
-    end
-    # Plot
-   
-    plot(strike_range, prices,
-         xlabel = "Strike Price (K)",
-         ylabel = "Option Price",
-         title = "Option Price vs Strike",
-         legend = false)
-    return nothing
+    plot(strike_range, prices, label="Call Price with Regime Switching approximation Krylov", xlabel="Strike", ylabel="Option Price", title="European Call Price vs Strike", legend=:topright)
 end
+strike_range = range(4.0, 15.0, length=101)
+plot_call_price_vs_strike(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, strike_range; risk_free_rate=0.0)
+savefig("call_price_vs_strike_krylov_T=1.0.png")
+plot(strike_range, prices, label="Call Price with Regime Switching approximation", xlabel="Strike", ylabel="Option Price", title="European Call Price vs Strike", legend=:topright)
 
 
 using .CuiSDEApproximation, Plots
 
 # Define your model parameters dict
 params = Dict(
-    "r"     => 0.05,
+    "r"     => 0.0,
     "mu"    => 0.0,
     "kappa" => 4.0,
     "theta" => 0.035,
@@ -781,14 +664,112 @@ params = Dict(
     "rho"   => -0.75
 )
 
+
+
 # Strike range and mappings
-strikes = range(5.0, 15.0, length=50)
+strikes = range(4.0, 15.0, length=101)
 mapping_S = CuiSDEApproximation.linear_mapping
 mapping_V = CuiSDEApproximation.linear_mapping
 
 # Plot using Krylov-based pricing
-plot_option_price_vs_strike(
-    10.0, 0.04, params, 1.0/5, 50, 50,
-    mapping_S, mapping_V, strikes, "call";
-    use_krylov=true, tol=1e-8, projections=20, risk_free_rate=0.05
+plot_call_price_vs_strike(10.0, 0.04, params, 1.0, 50, 50, mapping_S, mapping_V, strikes; risk_free_rate=0.0, use_krylov=true)
+plot_call_price_vs_strike(10.0, 0.04, params, 1.0, 50, 50, mapping_S, mapping_V, strikes; risk_free_rate=0.0, use_krylov=false)
+
+
+
+
+
+function study_convergence_MN(S0, V0, params, T, mapping_function_S, mapping_function_V, K, option_type; risk_free_rate=0.05)
+    # Grid sizes to test
+    grid_sizes = range(10, 250, step=5)
+    prices = Float64[]
+    
+    println("Studying convergence with increasing M, N:")
+    for grid_size in grid_sizes
+        println("Computing with M=N=$grid_size...")
+        @time price = CuiSDEApproximation.European_call_price_krylov(
+            S0, V0, params, T, grid_size, grid_size, 
+            mapping_function_S, mapping_function_V, K, option_type; 
+            risk_free_rate=risk_free_rate
+        )
+        push!(prices, price)
+        println("Price with M=N=$grid_size: $price")
+    end
+    
+    # Plot convergence
+    plot(grid_sizes, prices, 
+         marker=:circle, 
+         linewidth=2,
+         xlabel="Grid Size (M=N)", 
+         ylabel="Option Price",
+         title="European Call Option Price Convergence",
+         legend=false,
+         grid=true)
+    
+    return grid_sizes, prices
+end
+
+grid_sizes, prices = study_convergence_MN(
+    10.0, 0.04, params, 1.0, 
+    CuiSDEApproximation.linear_mapping, 
+    CuiSDEApproximation.linear_mapping, 
+    4.0, "call"; risk_free_rate=0.0
 )
+
+convergence = plot(grid_sizes, prices, 
+         marker=:circle, 
+         linewidth=2,
+         label="Option Price Convergence with Regime Switching",
+         xlabel="Grid Size (M=N)", 
+         ylabel="Option Price",
+         title="European Call Option Price Convergence",
+         legend=false,
+         grid=true)
+# Put a line at y = 6.0000
+hline!([6.0000], label="Exact Price", color=:red, linestyle=:dash)
+# Save the plot
+savefig("convergence_study_cui.png")
+errors = abs.(prices .- 6.0000)  # Assuming 6.0000 is the exact price
+error_plot = plot(grid_sizes, errors,
+         marker=:circle,
+         linewidth=2,
+         label="Error Convergence with Regime Switching",
+         xlabel="Grid Size (M=N)",
+         ylabel="Absolute Error",
+         title="European Call Option Price Error Convergence",
+         legend=false,
+         grid=true)
+savefig("error_convergence_study_cui.png")
+
+using ..DoubleDeathApproximation  # or adjust as needed for your module structure
+
+function cui_dict_to_dd_struct(params::Dict)
+    # Map Cui's kappa, theta, sigma to Double Death's ν, ϱ, κ
+    nu = params["kappa"] * params["theta"]
+    varrho = params["kappa"]
+    kappa_dd = params["sigma"]
+    return DoubleDeathApproximation.HestonParams(
+        S0 = get(params, "S0", 10.0),
+        μ = get(params, "mu", 0.0),
+        ν = nu,
+        κ = kappa_dd,
+        ϱ = varrho,
+        ρ = params["rho"],
+        v0 = get(params, "v0", 0.04)
+    )
+end
+# Cui -> Double Death
+cui_dict_to_dd_struct(params)
+import Base: ==
+
+function ==(a::HestonParams, b::HestonParams)
+    return a.S0 == b.S0 &&
+           a.μ == b.μ &&
+           a.ν == b.ν &&
+           a.κ == b.κ &&
+           a.ϱ == b.ϱ &&
+           a.ρ == b.ρ &&
+           a.v0 == b.v0
+end
+
+cui_dict_to_dd_struct(params) == DoubleDeathApproximation.HestonParams()
