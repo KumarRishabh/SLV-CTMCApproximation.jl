@@ -99,12 +99,32 @@ function b22(V; params::HestonParams = DEFAULT_H_PARAMS)
     params.ν - params.ϱ * V
 end
 # After X_t = \log(S_t) and Y_t = √V_t
-function transformed_σ11(S, V; params::HestonParams = DEFAULT_H_PARAMS)
-    """
-    arcsinh_mapping(ξ, V₀, V_min, V_max, M, γ)
-
-Maps a grid `ξ` in [0,1] to variance levels using the arcsinh transformation.
 """
+$$
+      dX_t &= \left(\mu - \tfrac12 V_t\right)\,dt + \sqrt{V_t}\,dW^1_t, \\
+      dY_t &= \left(\frac{\kappa\theta - \tfrac14 \sigma^2}{2 Y_t} - \tfrac12 \kappa Y_t\right)\,dt + \tfrac\sigma2\,dW^2_t
+$$
+"""
+function transformed_σ11(X, Y; params::HestonParams = DEFAULT_H_PARAMS)
+    sqrt(1 - params.ρ^2) * Y
+end
+
+function transformed_σ12(X, Y; params::HestonParams = DEFAULT_H_PARAMS)
+    params.ρ * Y
+end
+
+function transformed_σ22(X, Y; params::HestonParams = DEFAULT_H_PARAMS)
+    params.κ * 0.5 * Y
+end
+
+function transformed_b1(X, Y; params::HestonParams = DEFAULT_H_PARAMS)
+    (params.μ - 0.5 * Y^2) * X
+end
+
+function transformed_b2(X, Y; params::HestonParams = DEFAULT_H_PARAMS)
+    (params.ν - 0.25 * params.κ^2) / (2 * Y) - 0.5 * params.ρ * Y
+end
+
 function arcsinh_mapping(ξ, V₀, V_min, V_max, M, γ)
     c1 = asinh((V_min - V₀) / γ)
     c2 = asinh((V_max - V₀) / γ)
@@ -232,6 +252,30 @@ Computes the transition rates for the joint asset price and variance process.
 The functions `b1`, `b2`, `sigma11`, `sigma12`, and `sigma22` should be provided
 by the user (or by a wrapper that specifies a particular model).
 """
+
+function transformed_transition_rates_dd(X, Y, N; transformed_b1, transformed_b2, transformed_σ11, transformed_σ12, transformed_σ22)
+    a10 = N * max(transformed_b1(X, Y), 0) + (N^2 / 2) * (transformed_σ11(X, Y)^2 + transformed_σ12(X, Y)^2 - abs(transformed_σ12(X, Y)) * transformed_σ22(X, Y))
+    s10 = N * max(-transformed_b1(X, Y), 0) + (N^2 / 2) * (transformed_σ11(X, Y)^2 + transformed_σ12(X, Y)^2 - abs(transformed_σ12(X, Y)) * transformed_σ22(X, Y))
+    a01 = N * max(transformed_b2(X, Y), 0) + (N^2 / 2) * (transformed_σ22(X, Y)^2 - abs(transformed_σ12(X, Y)) * transformed_σ22(X, Y))
+    s01 = N * max(-transformed_b2(X, Y), 0) + (N^2 / 2) * (transformed_σ22(X, Y)^2 - abs(transformed_σ12(X, Y)) * transformed_σ22(X, Y))
+    a11 = (N^2 / 2) * max(transformed_σ12(X, Y), 0) * transformed_σ22(X, Y)
+    s11 = (N^2 / 2) * max(transformed_σ12(X, Y), 0) * transformed_σ22(X, Y)
+    t12 = (N^2 / 2) * max(-transformed_σ12(X, Y), 0) * transformed_σ22(X, Y)
+    t21 = (N^2 / 2) * max(-transformed_σ12(X, Y), 0) * transformed_σ22(X, Y)
+    return (a10, s10, a01, s01, a11, s11, t12, t21)
+end
+
+function transformed_transition_rates_reduced(X, Y, N; transformed_b1, transformed_b2, transformed_σ11, transformed_σ12, transformed_σ22)
+    a10 = N * max(transformed_b1(X, Y), 0) + (N^2 / 2) * (transformed_σ11(X, Y)^2 + transformed_σ12(X, Y)^2 - abs(transformed_σ12(X, Y)) * transformed_σ22(X, Y))
+    s10 = N * max(-transformed_b1(X, Y), 0) + (N^2 / 2) * (transformed_σ11(X, Y)^2 + transformed_σ12(X, Y)^2)
+    a01 = N * max(transformed_b2(X, Y), 0) + (N^2 / 2) * (transformed_σ22(X, Y)^2 - 2 * max(transformed_σ12(X, Y), 0) * transformed_σ22(X, Y))
+    s01 = N * max(-transformed_b2(X, Y), 0) + (N^2 / 2) * (transformed_σ22(X, Y)^2 - 2 * max(-transformed_σ12(X, Y), 0) * transformed_σ22(X, Y))
+    a11 = (N^2) * max(transformed_σ12(X, Y), 0) * transformed_σ22(X, Y)
+    t21 = (N^2) * max(-transformed_σ12(X, Y), 0) * transformed_σ22(X, Y)
+    t12 = s11 = 0.0
+    return (a10, s10, a01, s01, a11, s11, t12, t21)
+end
+
 function transition_rates_dd(S, V, N; b1, b2, sigma11, sigma12, sigma22) # Only works with linear mappings for now
     a10 = N * max(b1(S, V), 0) + (N^2 / 2) * (sigma11(S, V)^2 + sigma12(S, V)^2 - abs(sigma12(S, V)) * sigma22(S, V))
     s10 = N * max(-b1(S, V), 0) + (N^2 / 2) * (sigma11(S, V)^2 + sigma12(S, V)^2 - abs(sigma12(S, V)) * sigma22(S, V))
@@ -259,8 +303,7 @@ end
 Constructs the generator matrix Q for the CTMC approximation over a grid of
 N asset price levels and N variance levels. The step size is given by ℓ.
 """
-function construct_Q(N, S_max, S_min, V_max, V_min; b1 = b11, b2 = b22, sigma11 = sigma11, sigma12 = sigma12, sigma22 = sigma22, reduced=true)
-    
+function construct_Q(N, S_max, S_min, V_max, V_min; b1 = b11, b2 = b22, sigma11 = sigma11, sigma12 = sigma12, sigma22 = sigma22, reduced=true, transformed=false)
     Q = spzeros(N * N, N * N)
     l1 = (S_max - S_min)/N
     l2 = (V_max - V_min)/N
@@ -268,13 +311,27 @@ function construct_Q(N, S_max, S_min, V_max, V_min; b1 = b11, b2 = b22, sigma11 
         idx = (i - 1) * N + j
         S = i * l1
         V = j * l2
-        if reduced==false
-            a10, s10, a01, s01, a11, s11, t12, t21 = transition_rates_dd(S, V, N;
-                b1=b1, b2=b2, sigma11=sigma11, sigma12=sigma12, sigma22=sigma22)
+        if transformed == false
+            if reduced == false
+                a10, s10, a01, s01, a11, s11, t12, t21 = transition_rates_dd(S, V, N;
+                    b1=b1, b2=b2, sigma11=sigma11, sigma12=sigma12, sigma22=sigma22)
+            else
+                a10, s10, a01, s01, a11, s11, t12, t21 = transition_rates_reduced(S, V, N;
+                    b1=b1, b2=b2, sigma11=sigma11, sigma12=sigma12, sigma22=sigma22)
+            end
         else
-            a10, s10, a01, s01, a11, s11, t12, t21 = transition_rates_reduced(S, V, N;
-                b1=b1, b2=b2, sigma11=sigma11, sigma12=sigma12, sigma22=sigma22)
+            X = log(S)
+            Y = sqrt(V)
+            if reduced == false
+                a10, s10, a01, s01, a11, s11, t12, t21 = transformed_transition_rates_dd(S, V, N;
+                    transformed_b1=transformed_b1, transformed_b2=transformed_b2, transformed_σ11=transformed_σ11, transformed_σ12=transformed_σ12, transformed_σ22=transformed_σ22)
+            else
+                a10, s10, a01, s01, a11, s11, t12, t21 = transformed_transition_rates_reduced(S, V, N;
+                    transformed_b1=transformed_b1, transformed_b2=transformed_b2, transformed_σ11=transformed_σ11, transformed_σ12=transformed_σ12, transformed_σ22=transformed_σ22)
+            end
         end
+
+
         if i < N
             Q[idx, idx + N] = a01
         end
@@ -437,6 +494,8 @@ function European_call_price_krylov(S_0, V_0, params::HestonParams, T, variance_
     option_price = exp(-r * T) * dot(w_tilde, G)
     return option_price
 end
+
+
 """
     compute_transition_matrices(Q, Δt_array)
 
