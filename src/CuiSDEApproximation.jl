@@ -678,7 +678,27 @@ params = Dict(
     "rho"   => -0.75
 )
 
+@with_kw mutable struct HestonParams
+    S0::Float64 = 100.0   # initial spot
+    r::Float64  = 0.02    # risk‑free rate (risk‑neutral drift of S)
+    eff_mu::Float64 = 0.0 # effective drift of S under risk‑neutral measure
+    kappa::Float64 = 6.21 # mean reversion speed for variance
+    theta::Float64 = 0.04 # long‑run mean variance
+    xi::Float64    = 0.50 # vol‑of‑vol (ξ)
+    rho::Float64   = -0.7 # correlation
+    v0::Float64    = 0.04 # initial variance
+end
 
+params_cui = HestonParams(
+
+    r = 0.0,
+    eff_mu = 0.0,
+    kappa = 4.0,
+    theta = 0.035,
+    xi = 0.15,
+    rho = -0.75,
+    v0 = 0.04
+)
 
 # Strike range and mappings
 strikes = range(4.0, 15.0, length=51)
@@ -686,8 +706,8 @@ mapping_S = CuiSDEApproximation.linear_mapping
 mapping_V = CuiSDEApproximation.linear_mapping
 
 # Plot using Krylov-based pricing
-plot_call_price_vs_strike(10.0, 0.04, params, 1.0, 50, 50, mapping_S, mapping_V, strikes; risk_free_rate=0.0, use_krylov=true)
-plot_call_price_vs_strike(10.0, 0.04, params, 1.0, 50, 50, mapping_S, mapping_V, strikes; risk_free_rate=0.0, use_krylov=false)
+plot_call_price_vs_strike(100.0, 0.04, params_cui, 1.0, 50, 50, mapping_S, mapping_V, strikes; risk_free_rate=0.0, use_krylov=true)
+plot_call_price_vs_strike(100.0, 0.04, params_cui, 1.0, 50, 50, mapping_S, mapping_V, strikes; risk_free_rate=0.0, use_krylov=false)
 
 savefig("optionvsstrike_comparison_cui.png")
 

@@ -1,4 +1,3 @@
-using Parameters
 
 module SLVCTMCApproximation
 using Parameters
@@ -230,45 +229,45 @@ function multiple_price_volatility_simulations(T, μ, ν, ρ, κ, ϱ, S0, v0; nu
 end
 end
 
-@with_kw struct HestonParameters
-    S0::Float64 = 100.0
-    V0::Float64 = 0.04
-    mu::Float64 = -0.5
-    nu::Float64 = 0.01
-    mean_reversion_coeff::Float64 = 5.3
-    rho::Float64 = -0.7
-    kappa::Float64 = -0.5
-end
+# @with_kw struct HestonParameters
+#     S0::Float64 = 100.0
+#     V0::Float64 = 0.04
+#     mu::Float64 = -0.5
+#     nu::Float64 = 0.01
+#     mean_reversion_coeff::Float64 = 5.3
+#     rho::Float64 = -0.7
+#     kappa::Float64 = -0.5
+# end
 
-@with_kw struct SimulationParameters
-    epsilon::Float64 = 10e-06
-    nsim::Int64 = 10000
-end 
+# @with_kw struct SimulationParameters
+#     epsilon::Float64 = 10e-06
+#     nsim::Int64 = 10000
+# end 
 
-@with_kw struct PayoffParameters
-    strike::Float64 = 100.0
-    maturity::Float64 = 1.0
-end
+# @with_kw struct PayoffParameters
+#     strike::Float64 = 100.0
+#     maturity::Float64 = 1.0
+# end
 
-hestonparams = HestonParameters()
-bins = SLVCTMCApproximation.VolatilityBins(hestonparams.nu, hestonparams.mean_reversion_coeff, hestonparams.kappa, hestonparams.V0, 10, γ = 100, num_bins = 100)
-Q = SLVCTMCApproximation.calculatevolatilityGenerator(hestonparams.nu, hestonparams.mean_reversion_coeff, hestonparams.kappa, hestonparams.V0, 10, γ = 100, num_bins = 100)
-volatilitytransitions, transition_times = SLVCTMCApproximation.simulateQtransitions(Q, bins, 10, v0 = hestonparams.V0)
-volatitiltyprocess = bins[volatilitytransitions]
-plot(transition_times, volatitiltyprocess, title = "Volatility Process vs Time", label = "Volatility Process", xlabel = "Time", ylabel = "Volatility", legend = false)
-price_process = SLVCTMCApproximation.simulatePriceProcess(transition_times, volatitiltyprocess, hestonparams.mu, hestonparams.nu, hestonparams.rho, hestonparams.kappa, hestonparams.mean_reversion_coeff, hestonparams.S0, hestonparams.V0)
-plot(transition_times, exp.(price_process), title = "Price Process vs Time", label = "Price Process", xlabel = "Time", ylabel = "Price", legend = false)
+# hestonparams = HestonParameters()
+# bins = SLVCTMCApproximation.VolatilityBins(hestonparams.nu, hestonparams.mean_reversion_coeff, hestonparams.kappa, hestonparams.V0, 10, γ = 100, num_bins = 100)
+# Q = SLVCTMCApproximation.calculatevolatilityGenerator(hestonparams.nu, hestonparams.mean_reversion_coeff, hestonparams.kappa, hestonparams.V0, 10, γ = 100, num_bins = 100)
+# volatilitytransitions, transition_times = SLVCTMCApproximation.simulateQtransitions(Q, bins, 10, v0 = hestonparams.V0)
+# volatitiltyprocess = bins[volatilitytransitions]
+# plot(transition_times, volatitiltyprocess, title = "Volatility Process vs Time", label = "Volatility Process", xlabel = "Time", ylabel = "Volatility", legend = false)
+# price_process = SLVCTMCApproximation.simulatePriceProcess(transition_times, volatitiltyprocess, hestonparams.mu, hestonparams.nu, hestonparams.rho, hestonparams.kappa, hestonparams.mean_reversion_coeff, hestonparams.S0, hestonparams.V0)
+# plot(transition_times, exp.(price_process), title = "Price Process vs Time", label = "Price Process", xlabel = "Time", ylabel = "Price", legend = false)
 
-price_simulations, volatitiltyprocesses, transition_times = SLVCTMCApproximation.multiple_price_volatility_simulations(10, hestonparams.mu, hestonparams.nu, hestonparams.rho, hestonparams.kappa, hestonparams.mean_reversion_coeff, hestonparams.S0, hestonparams.V0; num_simulations = 100)
-p = plot()
-for i in 1:100
-    if i == 1
-        p = plot(transition_times[i], price_simulations[i], label = "Price Process", xlabel = "Time", ylabel = "Price", title = "Price Process vs Time", legend = false)
-    else 
-        plot!(transition_times[i], price_simulations[i], label = "Price Process", legend = false)
-    end
-end
-display(p)
+# price_simulations, volatitiltyprocesses, transition_times = SLVCTMCApproximation.multiple_price_volatility_simulations(10, hestonparams.mu, hestonparams.nu, hestonparams.rho, hestonparams.kappa, hestonparams.mean_reversion_coeff, hestonparams.S0, hestonparams.V0; num_simulations = 100)
+# # p = plot()
+# for i in 1:100
+#     if i == 1
+#         p = plot(transition_times[i], price_simulations[i], label = "Price Process", xlabel = "Time", ylabel = "Price", title = "Price Process vs Time", legend = false)
+#     else 
+#         plot!(transition_times[i], price_simulations[i], label = "Price Process", legend = false)
+#     end
+# end
+# display(p)
 # PS1 = Dict(
 #     :S0 => 100,
 #     :μ => 0.02,

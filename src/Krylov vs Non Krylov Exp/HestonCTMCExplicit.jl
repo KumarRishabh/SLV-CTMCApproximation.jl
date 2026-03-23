@@ -5,7 +5,7 @@
 #   1) A consistent Heston parameterization
 #   2) Construction of a CTMC generator for the CIR variance (MCAM-style tridiagonal)
 #   3) Exact CTMC simulation of the variance path from a generator Q
-#   4) Gaussian–Projection (GP) conditional moments given the variance path
+#   4) Gaussian–Process (GP) conditional moments given the variance path
 #   5) Path–wise Black–Scholes pricing kernel and Monte Carlo outer expectation
 #   6) A robust Andersen–QE Heston simulator (optional) for cross‑checking
 #
@@ -320,7 +320,7 @@ Ideally, as seen in Mijaljovic and Pistorius, the grid spacing performs well whe
 but for simplicity of analysis, we use a uniform grid here.
 """
 
-vmin, vmax, m = 1e-2, 100.0, 10_000
+vmin, vmax, m = 1e-2, 100.0, 1000
 
 vgrid = collect(range(vmin, vmax, length=m))
 Q = construct_generator_CIR(vgrid, p)
@@ -348,13 +348,13 @@ PS_Cui = HestonParams(S0=10.0, r=0.0, eff_mu=0, kappa=4.0, theta=0.035, xi=0.15,
 T = 1.0
 K = 4.0
 
-v_min, v_max, m = 1e-3 * PS_Cui.v0, 4.0 * PS_Cui.v0, 1000
+v_min, v_max, m = 1e-3 * PS_Cui.v0, 4.0 * PS_Cui.v0, 5000
 vgrid = collect(range(v_min, v_max, length=m))
-Q = construct_generator_CIR(vgrid, PS_Cui)
+Q = construct_generator_CIR(vgrid, PS_Cui; tolerance=1e-5)
 @info "Q shape" size(Q)
 @info "Row sums (∞‑norm) ~ 0" maximum(abs.(sum(Q, dims=2)))
 
-price_mc_cui = price_heston_ctmc_mc(PS_Cui, vgrid, Q, T, K, npaths=10)
+@time price_mc_cui = price_heston_ctmc_mc(PS_Cui, vgrid, Q, T, K; npaths=10)
 
 
 # Now, change the values of N so that I can plot the convergence rates of the European option price
@@ -404,9 +404,9 @@ plot(grid_sizes, values(errors), xlabel="N", ylabel="Absolute Error", title="Con
 
 ## Kozpinar parameter set
 PS_Kozpinar = HestonParams(S0=100.0, eff_mu = 0.04, r=0.05, kappa=1.0, theta=0.09, xi=0.4, rho=-0.7, v0=0.25)
-K = 90.0
+K = 500.0
 v_min, v_max, m = 0.001 * PS_Kozpinar.v0, 16.0 * PS_Kozpinar.v0, 10000
 vgrid = collect(range(v_min, v_max, length=m))
 Q = construct_generator_CIR(vgrid, PS_Kozpinar; tolerance=1e-5)
 
-price_mc_koz = price_heston_ctmc_mc(PS_Kozpinar, vgrid, Q, T, K; npaths=1000)
+price_mc_koz = price_heston_ctmc_mc(PS_Kozpinar, vgrid, Q, T, K; npaths=10000)

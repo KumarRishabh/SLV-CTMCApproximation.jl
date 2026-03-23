@@ -99,12 +99,11 @@ function b22(V; params::HestonParams = DEFAULT_H_PARAMS)
     params.ν - params.ϱ * V
 end
 # After X_t = \log(S_t) and Y_t = √V_t
-"""
-$$
-      dX_t &= \left(\mu - \tfrac12 V_t\right)\,dt + \sqrt{V_t}\,dW^1_t, \\
-      dY_t &= \left(\frac{\kappa\theta - \tfrac14 \sigma^2}{2 Y_t} - \tfrac12 \kappa Y_t\right)\,dt + \tfrac\sigma2\,dW^2_t
-$$
-"""
+
+# @doc"""
+#       dX_t &= \left(\mu - \tfrac12 V_t\right)\,dt + \sqrt{V_t}\,dW^1_t, \\
+#       dY_t &= \left(\frac{\kappa\theta - \tfrac14 \sigma^2}{2 Y_t} - \tfrac12 \kappa Y_t\right)\,dt + \tfrac\sigma2\,dW^2_t
+# """
 function transformed_σ11(X, Y; params::HestonParams = DEFAULT_H_PARAMS)
     sqrt(1 - params.ρ^2) * Y
 end
@@ -714,8 +713,8 @@ Strike = 4.0
 @time European_call_price = DoubleDeathApproximation.European_call_price_krylov(S0, V0, params, T, M, N, mapping_function_S, mapping_function_V, Strike, "call"; risk_free_rate=0.0, subspace_dim=30)
 # Plot the convergence of the European call price as we increase the number of grid points
 European_call_prices = []
-for N in 20:10:80
-    @time European_call_price = DoubleDeathApproximation.European_call_price_krylov(S0, V0, params, T, N, N, mapping_function_S, mapping_function_V, Strike, "call"; risk_free_rate=0.05)
+for N in 20:10:250
+    @time European_call_price = DoubleDeathApproximation.European_call_price_krylov(S0, V0, params, T, N, N, mapping_function_S, mapping_function_V, Strike, "call"; risk_free_rate=0.0)
     println("European Call Price with N=$N: $European_call_price")
     push!(European_call_prices, European_call_price)
 end
@@ -723,7 +722,6 @@ using Plots
 # plot the convergence of the European call price as we increase the number of grid points
 plot(20:10:150, European_call_prices, marker=:circle, xlabel="Number of grid points (N)", ylabel="European Call Price",
      title="Convergence of European Call Price with Increasing Grid Points", legend=false)
-
 
 # # Price the American option
 # option_price = price_american_option_ctmc(S0, V0, params, T, M, N, linear_mapping, linear_mapping, Strike, "call", monitoring_times)
@@ -754,7 +752,6 @@ sigma22 = DoubleDeathApproximation.sigma22
 Q_matrix = DoubleDeathApproximation.construct_Q(200, 500.0, 0.0, 1.0, 0.0; 
     b1=b11, b2=b22, sigma11=sigma11, sigma12=sigma12, sigma22=sigma22, reduced=false) # so the progress meter works
 
-
 function plot_option_price_curve(S_levels, V_levels, option_prices)
     # Create a meshgrid for S and V
     S_grid, V_grid = meshgrid(S_levels, V_levels)
@@ -763,3 +760,4 @@ function plot_option_price_curve(S_levels, V_levels, option_prices)
     surface(S_grid, V_grid, option_prices, xlabel="Asset Price", ylabel="Variance", zlabel="Option Price",
             title="Option Price Surface", color=:viridis)
 end
+

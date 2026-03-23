@@ -274,12 +274,12 @@ check_condition_C(params)
 
 # Choose parameter set for the Heston model such that condition (C) is satisfied
 # # params = HestonParams(S0=100.0, μ_h=0.02, ν=0.085, θ_h=4.0, κ_h=0.15, ρ=-0.75, v0=0.04)
-# PS_explicit = HestonParams(S0=100.0, μ_h=0.0319, ν=0.093025, θ_h=6.21, κ_h=0.61, ρ=-0.7, v0=0.04)
-# check_ondition_C(PS_explicit) 
-# T = 1.0
-# num_simulations = 5
-# times, S_paths, V_paths = explicit_heston_simulation(PS_explicit, T, num_simulations)
-# plot_simulation(times, S_paths, V_paths)c
+PS_explicit = HestonParams(S0=100.0, μ_h=0.0319, ν=0.093025, θ_h=6.21, κ_h=0.61, ρ=-0.7, v0=0.04)
+check_condition_C(PS_explicit) 
+T = 1.0
+num_simulations = 5
+times, S_paths, V_paths = explicit_heston_simulation(PS_explicit, T, num_simulations)
+plot_simulation(times, S_paths, V_paths)c
 # Approximate the volatility process using the MCAM method 
 
 # Price of European call option using the MCAM volatility process with the explicit price equation of the Heston model 

@@ -33,6 +33,17 @@ using Revise
 # =============================
 # 1) Parameters
 # =============================
+
+@with_kw mutable struct HestonParams
+    S0::Float64 = 100.0   # initial spot
+    r::Float64  = 0.0    # risk‑free rate (risk‑neutral drift of S)
+    kappa::Float64 = 2.0  # mean reversion speed for variance
+    theta::Float64 = 0.04 # long‑run mean variance
+    xi::Float64    = 0.1  # vol‑of‑vol (ξ)
+    rho::Float64   = -0.7 # correlation
+    v0::Float64    = 0.04 # initial variance
+end
+
 @with_kw mutable struct ThreeTwoParams
     S0::Float64 = 100.0   # initial spot
     r::Float64  = 0.0    # risk‑free rate (risk‑neutral drift of S)
@@ -61,7 +72,7 @@ Notes:
   • Reflection at boundaries is implemented via one‑sided stencils.
   • Returns Q::Matrix{Float64}, size m×m, with rows summing to 0.
 """
-function construct_generator_threetwo(v::Vector{Float64}, p::ThreeTwoParams;
+function construct_generator_CIR(v::Vector{Float64}, p::HestonParams;
                                 reflect_left::Bool=true, reflect_right::Bool=true, tolerance::Float64=1e-10)
     m = length(v)
     @assert m ≥ 3 "Need at least 3 grid points"
@@ -324,7 +335,7 @@ but for simplicity of analysis, we use a uniform grid here.
 vmin, vmax, m = 1e-2 * p.v0, 100.0 * p.v0, 10_000
 T = 0.5
 vgrid = collect(range(vmin, vmax, length=m))
-Q = construct_generator_threetwo(vgrid, p; tolerance = 1e-5)
+Q = construct_generator_CIR(vgrid, p; tolerance = 1e-5)
 @info "Q shape" size(Q)
 @info "Row sums (∞‑norm) ~ 0" maximum(abs.(sum(Q, dims=2)))
 
@@ -334,12 +345,12 @@ price_mc = price_threetwo_ctmc_mc(p, vgrid, Q, T, K; npaths=10000)
 price_mc_single_path = price_threetwo_ctmc_mc(p, vgrid, Q, T, K; npaths=1)
 @info "CTMC‑GP price (MC outer expectation)" price_mc
 
-# Cross‑check: Andersen–QE Monte‑Carlo (plain payoff)
-nsteps = 252; npaths = 20000
-ST, _ = simulate_heston_QE(p, T; nsteps=nsteps, npaths=npaths, path=false)
-payoff = max.(ST .- K, 0.0)
-price_qe = exp(-p.r*T) * mean(payoff)
-@info "Andersen‑QE MC price" price_qe
+# # Cross‑check: Andersen–QE Monte‑Carlo (plain payoff)
+# nsteps = 252; npaths = 20000
+# ST, _ = simulate_heston_QE(p, T; nsteps=nsteps, npaths=npaths, path=false)
+# payoff = max.(ST .- K, 0.0)
+# price_qe = exp(-p.r*T) * mean(payoff)
+# @info "Andersen‑QE MC price" price_qe
 
 
 println("Heston CTMC + GP Pricing script loaded successfully.")
